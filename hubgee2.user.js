@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.5
+// @version      1.6
 // @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes live-generation detection.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -103,8 +103,10 @@
     // ==========================================
     function isBlockGenerating(block, isGPT) {
         if (isGPT) {
-            // ChatGPT uses a reliable parent class while streaming
-            return !!block.closest('.result-streaming');
+            // Check for the animate-spin SVG in the code block header or the streaming class
+            const hasSpinner = block.parentElement && block.parentElement.querySelector('svg.animate-spin');
+            const isStreaming = block.closest('.result-streaming');
+            return !!hasSpinner || !!isStreaming;
         } else {
             // Gemini requires a heuristic approach
             let isChanging = false;
@@ -388,7 +390,6 @@
                     if (block.parentNode) block.parentNode.insertBefore(btn, block);
                 }
 
-                // Dynamic UI Update
                 const btn = block._hubgeeBtn;
                 if (btn && btn.dataset.hubgeePressArmed !== '1' && !btn.classList.contains('hubgee2-working') && !btn.textContent.includes('✅')) {
                     if (isGenerating) {
@@ -447,7 +448,6 @@
                 if (pre.parentNode) pre.parentNode.insertBefore(btn, pre);
             });
 
-            // Dynamic UI Update for ChatGPT outside the main injection block to catch existing buttons
             document.querySelectorAll('pre.hubgee2-injected').forEach(function (pre, index) {
                 const btn = pre._hubgeeBtn;
                 const isGenerating = isBlockGenerating(pre, true);
