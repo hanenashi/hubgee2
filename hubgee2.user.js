@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.0
+// @version      1.1
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
-// @match        https://gemini.google.com/*
-// @match        https://chatgpt.com/*
-// @match        https://chat.openai.com/*
-// @match        https://github.com/*
+// @match        *://*.gemini.google.com/*
+// @match        *://gemini.google.com/*
+// @match        *://*.chatgpt.com/*
+// @match        *://chatgpt.com/*
+// @match        *://*.openai.com/*
+// @match        *://*.github.com/*
+// @match        *://github.com/*
 // @icon         https://raw.githubusercontent.com/hanenashi/hubgee2/main/icon.svg
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -24,9 +27,10 @@
     const host = window.location.hostname;
     const path = window.location.pathname;
 
-    const isGemini = host === 'gemini.google.com';
-    const isChatGPT = host === 'chatgpt.com' || host === 'chat.openai.com';
-    const isGitHub = host === 'github.com';
+    // Use .includes() to safely catch 'www.' or any other subdomains mobile browsers throw at us
+    const isGemini = host.includes('gemini.google.com'); 
+    const isChatGPT = host.includes('chatgpt.com') || host.includes('openai.com');
+    const isGitHub = host.includes('github.com');
 
     const KEYS = {
         payload: 'hubgee2_payload',
