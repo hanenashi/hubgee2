@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.3
+// @version      1.4
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -435,7 +435,6 @@
                 const defaultLabel = `📦 Copy Block #${blockNum}`;
                 const btn = createSourceButton(defaultLabel);
                 
-                // Using the updated dual-target armWorkingOnPress
                 const pressState = armWorkingOnPress(btn, btn);
 
                 btn.addEventListener('click', async function (e) {
@@ -551,9 +550,6 @@
             return;
         }
 
-        // ==========================================
-        // YTMNT DRAG ENGINE INTEGRATION
-        // ==========================================
         const wrap = document.createElement('div');
         wrap.id = 'hubgee2-github-container';
         wrap.style.cssText = `
@@ -568,7 +564,6 @@
             savedPos = { x: window.innerWidth - 110, y: window.innerHeight - 80 };
         }
         
-        // Initial clamp just in case screen size changed while offline
         const initMaxX = Math.max(0, window.innerWidth - 110);
         const initMaxY = Math.max(0, window.innerHeight - 60);
         savedPos.x = Math.max(5, Math.min(savedPos.x, initMaxX));
@@ -587,14 +582,26 @@
         actionBtn.style.fontSize = '16px';
         actionBtn.style.fontFamily = 'sans-serif';
         actionBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
-        // Pass pointer events through to the wrapper so dragging is uninterrupted
         actionBtn.style.pointerEvents = 'none'; 
 
         wrap.appendChild(actionBtn);
         document.body.appendChild(wrap);
 
-        // The wrapper accepts the touch, but the button visually updates
-        const pressState = armWorkingOnPress(wrap, actionBtn);
+        // By creating a custom manual state here instead of using armWorkingOnPress,
+        // we completely bypass the immediate pointerdown "Working..." flash while dragging!
+        const pressState = {
+            confirmWorking: function () {
+                actionBtn.dataset.hubgeePrevLabel = actionBtn.textContent;
+                actionBtn.disabled = true;
+                actionBtn.textContent = 'Working...';
+                actionBtn.classList.add('hubgee2-working');
+            },
+            resetWorking: function (label) {
+                actionBtn.disabled = false;
+                actionBtn.classList.remove('hubgee2-working');
+                actionBtn.textContent = label || actionBtn.dataset.hubgeePrevLabel || actionBtn.textContent;
+            }
+        };
 
         wrap.addEventListener('contextmenu', function (e) {
             e.preventDefault();
@@ -696,7 +703,6 @@
                     let nextY = initialPos.y + dy;
 
                     const rect = wrap.getBoundingClientRect();
-                    // Divide by scale factor to get raw bounds
                     const maxX = window.innerWidth - (rect.width / 0.92);
                     const maxY = window.innerHeight - (rect.height / 0.92);
 
@@ -730,7 +736,6 @@
 
         wrap.addEventListener('pointerdown', handleStart);
 
-        // Expose state so the resize listener can dynamically fix the bounds
         wrap.hubgeePos = savedPos;
 
         log('Action button added at', location.href, 'mode =', getMode());
@@ -751,7 +756,6 @@
             }
         }, 500);
 
-        // Auto-Recovery on resize / rotation (from YTMNT logic)
         window.addEventListener('resize', () => {
             const wrap = document.getElementById('hubgee2-github-container');
             if (wrap && wrap.hubgeePos) {
