@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.4
-// @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
+// @version      1.5
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes live-generation detection.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -48,22 +48,13 @@
     }
 
     function gmGet(key, fallback) {
-        try {
-            return GM_getValue(key, fallback);
-        } catch (err) {
-            warn('GM_getValue failed for', key, err);
-            return fallback;
-        }
+        try { return GM_getValue(key, fallback); } 
+        catch (err) { return fallback; }
     }
 
     function gmSet(key, value) {
-        try {
-            GM_setValue(key, value);
-            return true;
-        } catch (err) {
-            warn('GM_setValue failed for', key, err);
-            return false;
-        }
+        try { GM_setValue(key, value); return true; } 
+        catch (err) { return false; }
     }
 
     function getMode() {
@@ -78,10 +69,8 @@
 
     function cycleMode() {
         const current = getMode();
-        const index = MODES.indexOf(current);
-        const next = MODES[(index + 1) % MODES.length];
+        const next = MODES[(MODES.indexOf(current) + 1) % MODES.length];
         setMode(next);
-        log('Mode changed to', next);
         return next;
     }
 
@@ -92,48 +81,62 @@
     function showToast(message, bgColor) {
         const toast = document.createElement('div');
         toast.textContent = message;
-        toast.style.position = 'fixed';
-        toast.style.bottom = '90px';
-        toast.style.left = '50%';
-        toast.style.transform = 'translateX(-50%)';
-        toast.style.background = bgColor || '#222';
-        toast.style.color = '#fff';
-        toast.style.padding = '10px 14px';
-        toast.style.borderRadius = '8px';
-        toast.style.fontFamily = 'sans-serif';
-        toast.style.fontSize = '13px';
-        toast.style.fontWeight = 'bold';
-        toast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.35)';
-        toast.style.zIndex = '2147483647';
-        toast.style.pointerEvents = 'none';
-        toast.style.whiteSpace = 'pre-wrap';
-        toast.style.maxWidth = '90vw';
-        toast.style.opacity = '1';
-        toast.style.transition = 'opacity 0.25s ease';
+        toast.style.cssText = `
+            position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+            background: ${bgColor || '#222'}; color: #fff; padding: 10px 14px;
+            border-radius: 8px; font-family: sans-serif; font-size: 13px;
+            font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+            z-index: 2147483647; pointer-events: none; white-space: pre-wrap;
+            max-width: 90vw; opacity: 1; transition: opacity 0.25s ease;
+        `;
         document.body.appendChild(toast);
-
-        setTimeout(function () {
-            toast.style.opacity = '0';
-        }, 1600);
-
-        setTimeout(function () {
-            if (toast.parentNode) toast.parentNode.removeChild(toast);
-        }, 2000);
+        setTimeout(() => { toast.style.opacity = '0'; }, 1600);
+        setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 2000);
     }
 
     function nextFrame() {
-        return new Promise(function (resolve) {
-            requestAnimationFrame(function () {
-                resolve();
-            });
-        });
+        return new Promise(resolve => requestAnimationFrame(resolve));
+    }
+
+    // ==========================================
+    // GENERATION DETECTOR LOGIC
+    // ==========================================
+    function isBlockGenerating(block, isGPT) {
+        if (isGPT) {
+            // ChatGPT uses a reliable parent class while streaming
+            return !!block.closest('.result-streaming');
+        } else {
+            // Gemini requires a heuristic approach
+            let isChanging = false;
+            const currentLen = block.innerText.length;
+            
+            // 1. Text length monitor
+            if (block._hubgeeLastLen !== currentLen) {
+                block._hubgeeLastLen = currentLen;
+                block._hubgeeLastChange = Date.now();
+                isChanging = true;
+            } else if (Date.now() - (block._hubgeeLastChange || 0) < 2000) {
+                // Keep it locked for 2s after last char to catch slow API chunks
+                isChanging = true;
+            }
+            
+            // 2. Global Stop button check
+            const stopBtn = document.querySelector('button[aria-label="Stop generating"], button[aria-label="Stop stream"]');
+            if (stopBtn) {
+                const allPres = document.querySelectorAll('pre');
+                if (allPres[allPres.length - 1] === block) {
+                    isChanging = true;
+                }
+            }
+            return isChanging;
+        }
     }
 
     function armWorkingOnPress(eventTarget, visualTarget) {
         if (!eventTarget || !visualTarget) return null;
 
         function showWorkingSoon() {
-            if (visualTarget.disabled) return;
+            if (visualTarget.disabled || visualTarget.classList.contains('hubgee2-generating')) return;
             visualTarget.dataset.hubgeePressArmed = '1';
             visualTarget.dataset.hubgeePrevLabel = visualTarget.textContent;
             visualTarget.textContent = 'Working...';
@@ -178,14 +181,14 @@
         style.id = 'hubgee2-style';
         style.textContent = `
             .hubgee2-btn {
-                transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, opacity 0.14s ease;
+                transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, opacity 0.14s ease, background 0.2s ease;
                 will-change: transform;
             }
-            .hubgee2-btn:hover {
+            .hubgee2-btn:not(:disabled):hover {
                 transform: translateY(-1px);
                 filter: brightness(1.04);
             }
-            .hubgee2-btn:active {
+            .hubgee2-btn:not(:disabled):active {
                 transform: scale(0.97);
                 filter: brightness(0.96);
             }
@@ -194,7 +197,11 @@
                 cursor: progress !important;
                 opacity: 0.96;
             }
-            .hubgee2-btn:disabled {
+            .hubgee2-btn.hubgee2-generating {
+                background: #4b5563 !important;
+                cursor: wait !important;
+                opacity: 0.8;
+                animation: hubgee2PulseSlow 2.5s ease-in-out infinite;
                 pointer-events: none;
             }
             @keyframes hubgee2Pulse {
@@ -202,22 +209,22 @@
                 50%  { transform: scale(1.03); box-shadow: 0 6px 18px rgba(0,0,0,.35); }
                 100% { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25); }
             }
+            @keyframes hubgee2PulseSlow {
+                0%   { filter: brightness(1); }
+                50%  { filter: brightness(1.15); }
+                100% { filter: brightness(1); }
+            }
         `;
         document.head.appendChild(style);
     }
 
     function locateGitHubEditor() {
         const candidates = [];
-
         function add(selector) {
-            const els = document.querySelectorAll(selector);
-            els.forEach(function (el) {
+            document.querySelectorAll(selector).forEach(el => {
                 candidates.push({
-                    el: el,
-                    selector: selector,
-                    tag: el.tagName || '',
-                    className: el.className || '',
-                    ariaLabel: el.getAttribute('aria-label') || '',
+                    el: el, selector: selector, tag: el.tagName || '',
+                    className: el.className || '', ariaLabel: el.getAttribute('aria-label') || '',
                     name: el.getAttribute('name') || ''
                 });
             });
@@ -238,30 +245,16 @@
             const aria = (c.ariaLabel || '').toLowerCase();
             const name = (c.name || '').toLowerCase();
 
-            const looksLikeCommitBox =
-                cls.includes('form-control') ||
-                aria.includes('commit') ||
-                aria.includes('description') ||
-                name.includes('message') ||
-                name.includes('description') ||
-                name.includes('feedback') ||
-                name.includes('filename');
+            if (cls.includes('form-control') || aria.includes('commit') || aria.includes('description') ||
+                name.includes('message') || name.includes('description') || name.includes('feedback') || name.includes('filename')) {
+                continue;
+            }
 
-            if (looksLikeCommitBox) continue;
-
-            const looksLikeEditor =
-                c.selector !== 'textarea' ||
-                cls.includes('file-editor') ||
-                cls.includes('cm-') ||
-                aria.includes('editor') ||
-                aria.includes('code') ||
-                aria.includes('file');
-
-            if (looksLikeEditor) {
+            if (c.selector !== 'textarea' || cls.includes('file-editor') || cls.includes('cm-') ||
+                aria.includes('editor') || aria.includes('code') || aria.includes('file')) {
                 return c.el;
             }
         }
-
         return null;
     }
 
@@ -269,94 +262,53 @@
         const target = locateGitHubEditor();
 
         if (!target) {
-            warn('No GitHub editor target found');
             showToast('No GitHub editor found', '#b91c1c');
             return false;
         }
 
-        log('Chosen editor target:', {
-            tag: target.tagName || '',
-            className: target.className || '',
-            ariaLabel: target.getAttribute('aria-label') || '',
-            name: target.getAttribute('name') || '',
-            isContentEditable: !!target.isContentEditable
-        });
-
-        try {
-            target.focus();
-        } catch (err) {
-            warn('Focus failed:', err);
-        }
+        try { target.focus(); } catch (err) {}
 
         if (target.tagName === 'TEXTAREA') {
             try {
                 const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
                 const nativeSetter = desc && desc.set ? desc.set : null;
 
-                if (nativeSetter) {
-                    nativeSetter.call(target, newText);
-                } else {
-                    target.value = newText;
-                }
+                if (nativeSetter) nativeSetter.call(target, newText);
+                else target.value = newText;
 
-                target.dispatchEvent(new InputEvent('input', {
-                    bubbles: true,
-                    data: newText,
-                    inputType: 'insertText'
-                }));
+                target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
                 target.dispatchEvent(new Event('change', { bubbles: true }));
-
-                log('Textarea inject OK, len =', target.value.length);
                 return true;
-            } catch (err) {
-                warn('Textarea inject failed:', err);
-            }
+            } catch (err) {}
         }
 
         if (target.isContentEditable) {
             try {
                 target.focus();
-
                 const sel = window.getSelection();
                 if (sel) sel.removeAllRanges();
 
                 const range = document.createRange();
                 range.selectNodeContents(target);
                 range.collapse(true);
-
                 if (sel) sel.addRange(range);
 
-                const ok = await new Promise(function (resolve) {
-                    requestAnimationFrame(function () {
+                const ok = await new Promise(resolve => {
+                    requestAnimationFrame(() => {
                         try {
-                            const worked = document.execCommand('selectAll') &&
-                                           document.execCommand('insertText', false, newText);
+                            const worked = document.execCommand('selectAll') && document.execCommand('insertText', false, newText);
                             resolve(!!worked);
-                        } catch (err) {
-                            resolve(false);
-                        }
+                        } catch (err) { resolve(false); }
                     });
                 });
 
-                if (ok) {
-                    log('Contenteditable inject OK via execCommand');
-                    return true;
-                }
+                if (ok) return true;
 
                 target.textContent = newText;
-                target.dispatchEvent(new InputEvent('input', {
-                    bubbles: true,
-                    data: newText,
-                    inputType: 'insertText'
-                }));
-
-                log('Contenteditable inject OK via fallback');
+                target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
                 return true;
-            } catch (err) {
-                warn('Contenteditable inject failed:', err);
-            }
+            } catch (err) {}
         }
-
         showToast('Paste failed', '#b91c1c');
         return false;
     }
@@ -371,30 +323,16 @@
             a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
-
-            setTimeout(function () {
-                URL.revokeObjectURL(url);
-                if (a.parentNode) a.parentNode.removeChild(a);
-            }, 1000);
-
-            log('Download triggered, len =', text.length);
+            setTimeout(() => { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 1000);
             return true;
-        } catch (err) {
-            warn('Download failed:', err);
-            return false;
-        }
+        } catch (err) { return false; }
     }
 
-    async function setPayloadFromText(text, sourceName) {
-        const ok = gmSet(KEYS.payload, text);
-
-        if (!ok) {
-            warn('Failed to store payload from', sourceName);
+    function setPayloadFromText(text, sourceName) {
+        if (!gmSet(KEYS.payload, text)) {
             showToast('Copy failed', '#b91c1c');
             return false;
         }
-
-        log(sourceName + ' copied payload, len =', text.length);
         showToast('Copied ' + text.length + ' chars', '#166534');
         return true;
     }
@@ -403,150 +341,144 @@
         const btn = document.createElement('button');
         btn.textContent = label;
         btn.className = 'hubgee2-btn';
-        btn.style.display = 'block';
-        btn.style.width = '100%';
-        btn.style.padding = '14px';
-        btn.style.marginBottom = '8px';
-        btn.style.background = '#2563eb';
-        btn.style.color = '#fff';
-        btn.style.border = 'none';
-        btn.style.borderRadius = '6px';
-        btn.style.fontSize = '16px';
-        btn.style.fontWeight = 'bold';
-        btn.style.fontFamily = 'sans-serif';
-        btn.style.cursor = 'pointer';
-        btn.style.boxShadow = '0 4px 10px rgba(0,0,0,.18)';
+        btn.style.cssText = `
+            display: block; width: 100%; padding: 14px; margin-bottom: 8px;
+            background: #2563eb; color: #fff; border: none; border-radius: 6px;
+            font-size: 16px; font-weight: bold; font-family: sans-serif;
+            cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,.18);
+        `;
         return btn;
     }
 
     function initGemini() {
-        log('Gemini init at', location.href);
-
         setInterval(function () {
             if (!window.location.pathname.startsWith('/app/')) return;
 
-            const codeBlocks = document.querySelectorAll('pre');
-
-            codeBlocks.forEach(function (block, index) {
-                if (block.classList.contains('hubgee2-injected')) return;
-                block.classList.add('hubgee2-injected');
-
+            document.querySelectorAll('pre').forEach(function (block, index) {
                 const blockNum = index + 1;
                 const defaultLabel = `📦 Copy Block #${blockNum}`;
-                const btn = createSourceButton(defaultLabel);
-                
-                const pressState = armWorkingOnPress(btn, btn);
+                const isGenerating = isBlockGenerating(block, false);
 
-                btn.addEventListener('click', async function (e) {
-                    e.preventDefault();
+                if (!block.classList.contains('hubgee2-injected')) {
+                    block.classList.add('hubgee2-injected');
+                    const btn = createSourceButton(defaultLabel);
+                    block._hubgeeBtn = btn;
+                    
+                    const pressState = armWorkingOnPress(btn, btn);
 
-                    pressState.confirmWorking();
-                    await new Promise(r => setTimeout(r, 150));
+                    btn.addEventListener('click', async function (e) {
+                        e.preventDefault();
+                        if (btn.classList.contains('hubgee2-generating')) return;
 
-                    try {
+                        pressState.confirmWorking();
+                        await nextFrame();
+
                         let rawCode = block.innerText || block.textContent || '';
                         rawCode = rawCode.replace(/\u00a0/g, ' ');
-                        const ok = await setPayloadFromText(rawCode, 'Gemini');
+                        const ok = setPayloadFromText(rawCode, 'Gemini');
 
                         pressState.resetWorking(ok ? `✅ Copied #${blockNum}` : defaultLabel);
-
-                        setTimeout(function () {
-                            btn.textContent = defaultLabel;
+                        setTimeout(() => { 
+                            if (block._hubgeeBtn && !block._hubgeeBtn.classList.contains('hubgee2-generating')) {
+                                block._hubgeeBtn.textContent = defaultLabel; 
+                            }
                         }, 1600);
-                    } catch (err) {
-                        warn('Gemini copy failed:', err);
-                        pressState.resetWorking(defaultLabel);
-                        showToast('Copy failed', '#b91c1c');
-                    }
-                });
+                    });
 
-                if (block.parentNode) {
-                    block.parentNode.insertBefore(btn, block);
+                    if (block.parentNode) block.parentNode.insertBefore(btn, block);
+                }
+
+                // Dynamic UI Update
+                const btn = block._hubgeeBtn;
+                if (btn && btn.dataset.hubgeePressArmed !== '1' && !btn.classList.contains('hubgee2-working') && !btn.textContent.includes('✅')) {
+                    if (isGenerating) {
+                        btn.disabled = true;
+                        btn.classList.add('hubgee2-generating');
+                        btn.textContent = `⏳ Generating #${blockNum}...`;
+                    } else {
+                        btn.disabled = false;
+                        btn.classList.remove('hubgee2-generating');
+                        btn.textContent = defaultLabel;
+                    }
                 }
             });
         }, 1200);
     }
 
     function extractChatGPTCodeText(pre) {
-        const cmReadonly = pre.querySelector('.cm-content.q9tKkq_readonly');
-        if (cmReadonly) {
-            return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\u00a0/g, ' ');
-        }
-
-        const cmContent = pre.querySelector('.cm-content');
-        if (cmContent) {
-            return (cmContent.innerText || cmContent.textContent || '').replace(/\u00a0/g, ' ');
-        }
-
+        const cmReadonly = pre.querySelector('.cm-content.q9tKkq_readonly') || pre.querySelector('.cm-content');
+        if (cmReadonly) return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\u00a0/g, ' ');
         return (pre.innerText || pre.textContent || '').replace(/\u00a0/g, ' ');
     }
 
     function initChatGPT() {
-        log('ChatGPT init at', location.href);
-
         setInterval(function () {
-            const codeBlocks = document.querySelectorAll('pre');
-
-            codeBlocks.forEach(function (pre, index) {
+            document.querySelectorAll('pre').forEach(function (pre, index) {
                 if (pre.classList.contains('hubgee2-injected')) return;
 
-                const hasCodeViewer =
-                    pre.querySelector('#code-block-viewer') ||
-                    pre.querySelector('.cm-editor') ||
-                    pre.querySelector('.cm-content');
-
-                if (!hasCodeViewer) return;
-
+                if (!pre.querySelector('#code-block-viewer') && !pre.querySelector('.cm-editor') && !pre.querySelector('.cm-content')) return;
                 pre.classList.add('hubgee2-injected');
 
                 const blockNum = index + 1;
                 const defaultLabel = `📦 Copy Block #${blockNum}`;
                 const btn = createSourceButton(defaultLabel);
+                pre._hubgeeBtn = btn;
+                
                 const pressState = armWorkingOnPress(btn, btn);
 
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
+                    if (btn.classList.contains('hubgee2-generating')) return;
 
                     pressState.confirmWorking();
-                    await new Promise(r => setTimeout(r, 150));
+                    await nextFrame();
 
-                    try {
-                        const rawCode = extractChatGPTCodeText(pre);
-                        const ok = await setPayloadFromText(rawCode, 'ChatGPT');
+                    const rawCode = extractChatGPTCodeText(pre);
+                    const ok = setPayloadFromText(rawCode, 'ChatGPT');
 
-                        pressState.resetWorking(ok ? `✅ Copied #${blockNum}` : defaultLabel);
-
-                        setTimeout(function () {
-                            btn.textContent = defaultLabel;
-                        }, 1600);
-                    } catch (err) {
-                        warn('ChatGPT copy failed:', err);
-                        pressState.resetWorking(defaultLabel);
-                        showToast('Copy failed', '#b91c1c');
-                    }
+                    pressState.resetWorking(ok ? `✅ Copied #${blockNum}` : defaultLabel);
+                    setTimeout(() => { 
+                        if (pre._hubgeeBtn && !pre._hubgeeBtn.classList.contains('hubgee2-generating')) {
+                            pre._hubgeeBtn.textContent = defaultLabel; 
+                        }
+                    }, 1600);
                 });
 
-                if (pre.parentNode) {
-                    pre.parentNode.insertBefore(btn, pre);
+                if (pre.parentNode) pre.parentNode.insertBefore(btn, pre);
+            });
+
+            // Dynamic UI Update for ChatGPT outside the main injection block to catch existing buttons
+            document.querySelectorAll('pre.hubgee2-injected').forEach(function (pre, index) {
+                const btn = pre._hubgeeBtn;
+                const isGenerating = isBlockGenerating(pre, true);
+                const defaultLabel = `📦 Copy Block #${index + 1}`;
+
+                if (btn && btn.dataset.hubgeePressArmed !== '1' && !btn.classList.contains('hubgee2-working') && !btn.textContent.includes('✅')) {
+                    if (isGenerating) {
+                        btn.disabled = true;
+                        btn.classList.add('hubgee2-generating');
+                        btn.textContent = `⏳ Generating #${index + 1}...`;
+                    } else {
+                        btn.disabled = false;
+                        btn.classList.remove('hubgee2-generating');
+                        btn.textContent = defaultLabel;
+                    }
                 }
             });
         }, 1200);
     }
 
     function ensureGitHubButton() {
-        const onEditPage = window.location.pathname.includes('/edit/');
-        const existing = document.getElementById('hubgee2-github-container');
-
-        if (!onEditPage) {
+        if (!window.location.pathname.includes('/edit/')) {
+            const existing = document.getElementById('hubgee2-github-container');
             if (existing) existing.remove();
             return;
         }
 
+        const existing = document.getElementById('hubgee2-github-container');
         if (existing) {
             const btn = existing.querySelector('button');
-            if (btn && !btn.classList.contains('hubgee2-working')) {
-                btn.textContent = modeLabel(getMode());
-            }
+            if (btn && !btn.classList.contains('hubgee2-working')) btn.textContent = modeLabel(getMode());
             return;
         }
 
@@ -573,22 +505,15 @@
         const actionBtn = document.createElement('button');
         actionBtn.textContent = modeLabel(getMode());
         actionBtn.className = 'hubgee2-btn';
-        actionBtn.style.padding = '16px 20px';
-        actionBtn.style.background = '#dc2626';
-        actionBtn.style.color = '#fff';
-        actionBtn.style.border = 'none';
-        actionBtn.style.borderRadius = '8px';
-        actionBtn.style.fontWeight = 'bold';
-        actionBtn.style.fontSize = '16px';
-        actionBtn.style.fontFamily = 'sans-serif';
-        actionBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
-        actionBtn.style.pointerEvents = 'none'; 
+        actionBtn.style.cssText = `
+            padding: 16px 20px; background: #dc2626; color: #fff; border: none;
+            border-radius: 8px; font-weight: bold; font-size: 16px; font-family: sans-serif;
+            box-shadow: 0 4px 10px rgba(0,0,0,.35); pointer-events: none; 
+        `;
 
         wrap.appendChild(actionBtn);
         document.body.appendChild(wrap);
 
-        // By creating a custom manual state here instead of using armWorkingOnPress,
-        // we completely bypass the immediate pointerdown "Working..." flash while dragging!
         const pressState = {
             confirmWorking: function () {
                 actionBtn.dataset.hubgeePrevLabel = actionBtn.textContent;
@@ -606,24 +531,18 @@
         wrap.addEventListener('contextmenu', function (e) {
             e.preventDefault();
             const next = cycleMode();
-            if (!actionBtn.classList.contains('hubgee2-working')) {
-                actionBtn.textContent = modeLabel(next);
-            }
+            if (!actionBtn.classList.contains('hubgee2-working')) actionBtn.textContent = modeLabel(next);
             showToast('Mode: ' + modeLabel(next), '#7c3aed');
         });
 
         async function triggerAction() {
             const incoming = gmGet(KEYS.payload, '');
-
             if (!incoming || typeof incoming !== 'string') {
-                warn('Payload empty or invalid');
                 showToast('Buffer empty', '#b91c1c');
                 return;
             }
 
             const mode = getMode();
-            log('Action mode =', mode, 'len =', incoming.length);
-
             pressState.confirmWorking();
             await nextFrame();
 
@@ -631,26 +550,14 @@
                 if (mode === 'download') {
                     const ok = downloadPayload(incoming);
                     pressState.resetWorking(modeLabel(getMode()));
-
-                    if (ok) {
-                        showToast('Downloaded ' + incoming.length + ' chars', '#166534');
-                    } else {
-                        showToast('Download failed', '#b91c1c');
-                    }
+                    showToast(ok ? `Downloaded ${incoming.length} chars` : 'Download failed', ok ? '#166534' : '#b91c1c');
                     return;
                 }
 
                 const ok = await injectIntoGitHubEditor(incoming);
                 pressState.resetWorking(modeLabel(getMode()));
-
-                if (ok) {
-                    showToast('Pasted ' + incoming.length + ' chars', '#166534');
-                } else {
-                    warn('Paste failed');
-                    showToast('Paste failed', '#b91c1c');
-                }
+                showToast(ok ? `Pasted ${incoming.length} chars` : 'Paste failed', ok ? '#166534' : '#b91c1c');
             } catch (err) {
-                warn('Action failed:', err);
                 pressState.resetWorking(modeLabel(getMode()));
                 showToast('Action failed', '#b91c1c');
             }
@@ -677,16 +584,12 @@
             longPressTimer = setTimeout(() => {
                 isLongPress = true;
                 const next = cycleMode();
-                if (!actionBtn.classList.contains('hubgee2-working')) {
-                    actionBtn.textContent = modeLabel(next);
-                }
+                if (!actionBtn.classList.contains('hubgee2-working')) actionBtn.textContent = modeLabel(next);
                 showToast('Mode: ' + modeLabel(next), '#7c3aed');
 
                 wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.1)`;
                 setTimeout(() => {
-                    if (isDragging) {
-                        wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
-                    }
+                    if (isDragging) wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
                 }, 150);
             }, 550);
 
@@ -722,11 +625,8 @@
                 isDragging = false;
                 wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.0)`;
 
-                if (hasMoved) {
-                    gmSet(KEYS.btnPos, savedPos);
-                } else if (!isLongPress) {
-                    triggerAction();
-                }
+                if (hasMoved) gmSet(KEYS.btnPos, savedPos);
+                else if (!isLongPress) triggerAction();
             };
 
             window.addEventListener('pointermove', handleMove, { passive: false });
@@ -735,15 +635,10 @@
         };
 
         wrap.addEventListener('pointerdown', handleStart);
-
         wrap.hubgeePos = savedPos;
-
-        log('Action button added at', location.href, 'mode =', getMode());
     }
 
     function initGitHub() {
-        log('GitHub init at', location.href);
-
         ensureGitHubButton();
         setInterval(ensureGitHubButton, 800);
 
@@ -751,7 +646,6 @@
         setInterval(function () {
             if (location.href !== lastUrl) {
                 lastUrl = location.href;
-                log('GitHub URL changed to', lastUrl);
                 ensureGitHubButton();
             }
         }, 500);
