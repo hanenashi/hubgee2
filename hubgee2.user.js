@@ -24,7 +24,7 @@
     const host = window.location.hostname;
     const path = window.location.pathname;
 
-    const isGemini = host === 'gemini.google.com' && path.startsWith('/app/');
+    const isGemini = host === 'gemini.google.com';
     const isChatGPT = host === 'chatgpt.com' || host === 'chat.openai.com';
     const isGitHub = host === 'github.com';
 
