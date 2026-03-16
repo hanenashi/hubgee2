@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.2
+// @version      1.3
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -129,201 +129,44 @@
         });
     }
 
-    function clampToViewport(el, x, y) {
-        const rect = el.getBoundingClientRect();
-        const maxX = Math.max(0, window.innerWidth - rect.width);
-        const maxY = Math.max(0, window.innerHeight - rect.height);
-        return {
-            x: Math.max(0, Math.min(x, maxX)),
-            y: Math.max(0, Math.min(y, maxY))
-        };
-    }
-
-    function applySavedPosition(el, key) {
-        const saved = gmGet(key, null);
-        if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
-            el.style.left = saved.x + 'px';
-            el.style.top = saved.y + 'px';
-            el.style.right = 'auto';
-            el.style.bottom = 'auto';
-        }
-    }
-
-    function makeDraggable(el, handle, saveKey) {
-        let isDragging = false;
-        let moved = false;
-        let startClientX = 0;
-        let startClientY = 0;
-        let offsetX = 0;
-        let offsetY = 0;
-        const dragThreshold = 6;
-
-        function start(clientX, clientY) {
-            const rect = el.getBoundingClientRect();
-            isDragging = true;
-            moved = false;
-            startClientX = clientX;
-            startClientY = clientY;
-            offsetX = clientX - rect.left;
-            offsetY = clientY - rect.top;
-        }
-
-        function move(clientX, clientY) {
-            if (!isDragging) return;
-
-            const dx = clientX - startClientX;
-            const dy = clientY - startClientY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            if (!moved && distance < dragThreshold) return;
-
-            moved = true;
-
-            const pos = clampToViewport(el, clientX - offsetX, clientY - offsetY);
-            el.style.left = pos.x + 'px';
-            el.style.top = pos.y + 'px';
-            el.style.right = 'auto';
-            el.style.bottom = 'auto';
-        }
-
-        function end() {
-            if (!isDragging) return;
-            isDragging = false;
-
-            if (moved) {
-                const rect = el.getBoundingClientRect();
-                gmSet(saveKey, { x: rect.left, y: rect.top });
-            }
-        }
-
-        handle.addEventListener('mousedown', function (e) {
-            start(e.clientX, e.clientY);
-        });
-
-        document.addEventListener('mousemove', function (e) {
-            move(e.clientX, e.clientY);
-        });
-
-        document.addEventListener('mouseup', function () {
-            end();
-        });
-
-        handle.addEventListener('touchstart', function (e) {
-            if (!e.touches || !e.touches.length) return;
-            const t = e.touches[0];
-            start(t.clientX, t.clientY);
-        }, { passive: true });
-
-        document.addEventListener('touchmove', function (e) {
-            if (!isDragging || !e.touches || !e.touches.length) return;
-            const t = e.touches[0];
-            move(t.clientX, t.clientY);
-        }, { passive: true });
-
-        document.addEventListener('touchend', function () {
-            end();
-        });
-
-        return function wasDragged() {
-            return moved;
-        };
-    }
-
-    function addLongPressModeCycle(el, onModeChanged) {
-        let pressTimer = null;
-        let longPressTriggered = false;
-        let startX = 0;
-        let startY = 0;
-        const holdMs = 550;
-        const moveThreshold = 8;
-
-        function clear() {
-            if (pressTimer) {
-                clearTimeout(pressTimer);
-                pressTimer = null;
-            }
-        }
-
-        el.addEventListener('touchstart', function (e) {
-            if (!e.touches || !e.touches.length) return;
-            const t = e.touches[0];
-            startX = t.clientX;
-            startY = t.clientY;
-            longPressTriggered = false;
-
-            clear();
-            pressTimer = setTimeout(function () {
-                longPressTriggered = true;
-                const next = cycleMode();
-                if (typeof onModeChanged === 'function') onModeChanged(next);
-                showToast('Mode: ' + modeLabel(next), '#7c3aed');
-            }, holdMs);
-        }, { passive: true });
-
-        el.addEventListener('touchmove', function (e) {
-            if (!pressTimer || !e.touches || !e.touches.length) return;
-            const t = e.touches[0];
-            const dx = t.clientX - startX;
-            const dy = t.clientY - startY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > moveThreshold) clear();
-        }, { passive: true });
-
-        el.addEventListener('touchend', function () {
-            setTimeout(function () {
-                longPressTriggered = false;
-            }, 0);
-            clear();
-        });
-
-        el.addEventListener('touchcancel', function () {
-            longPressTriggered = false;
-            clear();
-        });
-
-        return function wasLongPressTriggered() {
-            return longPressTriggered;
-        };
-    }
-
-    function armWorkingOnPress(btn) {
-        if (!btn) return null;
+    function armWorkingOnPress(eventTarget, visualTarget) {
+        if (!eventTarget || !visualTarget) return null;
 
         function showWorkingSoon() {
-            if (btn.disabled) return;
-            btn.dataset.hubgeePressArmed = '1';
-            btn.dataset.hubgeePrevLabel = btn.textContent;
-            btn.textContent = 'Working...';
-            btn.classList.add('hubgee2-working');
+            if (visualTarget.disabled) return;
+            visualTarget.dataset.hubgeePressArmed = '1';
+            visualTarget.dataset.hubgeePrevLabel = visualTarget.textContent;
+            visualTarget.textContent = 'Working...';
+            visualTarget.classList.add('hubgee2-working');
         }
 
         function cancelWorkingSoon() {
-            if (btn.dataset.hubgeePressArmed !== '1') return;
-            btn.dataset.hubgeePressArmed = '0';
-            btn.classList.remove('hubgee2-working');
-            btn.textContent = btn.dataset.hubgeePrevLabel || btn.textContent;
+            if (visualTarget.dataset.hubgeePressArmed !== '1') return;
+            visualTarget.dataset.hubgeePressArmed = '0';
+            visualTarget.classList.remove('hubgee2-working');
+            visualTarget.textContent = visualTarget.dataset.hubgeePrevLabel || visualTarget.textContent;
         }
 
-        btn.addEventListener('pointerdown', showWorkingSoon);
-        btn.addEventListener('mousedown', showWorkingSoon);
-        btn.addEventListener('touchstart', showWorkingSoon, { passive: true });
+        eventTarget.addEventListener('pointerdown', showWorkingSoon);
+        eventTarget.addEventListener('mousedown', showWorkingSoon);
+        eventTarget.addEventListener('touchstart', showWorkingSoon, { passive: true });
 
-        btn.addEventListener('pointerleave', cancelWorkingSoon);
-        btn.addEventListener('mouseleave', cancelWorkingSoon);
-        btn.addEventListener('touchcancel', cancelWorkingSoon, { passive: true });
+        eventTarget.addEventListener('pointerleave', cancelWorkingSoon);
+        eventTarget.addEventListener('mouseleave', cancelWorkingSoon);
+        eventTarget.addEventListener('touchcancel', cancelWorkingSoon, { passive: true });
 
         return {
             confirmWorking: function () {
-                btn.dataset.hubgeePressArmed = '0';
-                btn.disabled = true;
-                btn.textContent = 'Working...';
-                btn.classList.add('hubgee2-working');
+                visualTarget.dataset.hubgeePressArmed = '0';
+                visualTarget.disabled = true;
+                visualTarget.textContent = 'Working...';
+                visualTarget.classList.add('hubgee2-working');
             },
             resetWorking: function (label) {
-                btn.dataset.hubgeePressArmed = '0';
-                btn.disabled = false;
-                btn.classList.remove('hubgee2-working');
-                btn.textContent = label || btn.dataset.hubgeePrevLabel || btn.textContent;
+                visualTarget.dataset.hubgeePressArmed = '0';
+                visualTarget.disabled = false;
+                visualTarget.classList.remove('hubgee2-working');
+                visualTarget.textContent = label || visualTarget.dataset.hubgeePrevLabel || visualTarget.textContent;
             }
         };
     }
@@ -591,7 +434,9 @@
                 const blockNum = index + 1;
                 const defaultLabel = `📦 Copy Block #${blockNum}`;
                 const btn = createSourceButton(defaultLabel);
-                const pressState = armWorkingOnPress(btn);
+                
+                // Using the updated dual-target armWorkingOnPress
+                const pressState = armWorkingOnPress(btn, btn);
 
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
@@ -658,7 +503,7 @@
                 const blockNum = index + 1;
                 const defaultLabel = `📦 Copy Block #${blockNum}`;
                 const btn = createSourceButton(defaultLabel);
-                const pressState = armWorkingOnPress(btn);
+                const pressState = armWorkingOnPress(btn, btn);
 
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
@@ -706,12 +551,29 @@
             return;
         }
 
+        // ==========================================
+        // YTMNT DRAG ENGINE INTEGRATION
+        // ==========================================
         const wrap = document.createElement('div');
         wrap.id = 'hubgee2-github-container';
-        wrap.style.position = 'fixed';
-        wrap.style.right = '20px';
-        wrap.style.bottom = '20px';
-        wrap.style.zIndex = '2147483645';
+        wrap.style.cssText = `
+            position: fixed; top: 0; left: 0; z-index: 2147483645;
+            touch-action: none; user-select: none; -webkit-user-select: none;
+            transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+            cursor: pointer; -webkit-tap-highlight-color: transparent;
+        `;
+
+        let savedPos = gmGet(KEYS.btnPos, null);
+        if (!savedPos || typeof savedPos.x !== 'number') {
+            savedPos = { x: window.innerWidth - 110, y: window.innerHeight - 80 };
+        }
+        
+        // Initial clamp just in case screen size changed while offline
+        const initMaxX = Math.max(0, window.innerWidth - 110);
+        const initMaxY = Math.max(0, window.innerHeight - 60);
+        savedPos.x = Math.max(5, Math.min(savedPos.x, initMaxX));
+        savedPos.y = Math.max(5, Math.min(savedPos.y, initMaxY));
+        wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px)`;
 
         const actionBtn = document.createElement('button');
         actionBtn.textContent = modeLabel(getMode());
@@ -725,23 +587,16 @@
         actionBtn.style.fontSize = '16px';
         actionBtn.style.fontFamily = 'sans-serif';
         actionBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
-        actionBtn.style.cursor = 'pointer';
-        actionBtn.style.userSelect = 'none';
-        actionBtn.style.webkitUserSelect = 'none';
+        // Pass pointer events through to the wrapper so dragging is uninterrupted
+        actionBtn.style.pointerEvents = 'none'; 
 
         wrap.appendChild(actionBtn);
         document.body.appendChild(wrap);
 
-        applySavedPosition(wrap, KEYS.btnPos);
-        const wasDragged = makeDraggable(wrap, wrap, KEYS.btnPos);
-        const wasLongPressTriggered = addLongPressModeCycle(actionBtn, function (mode) {
-            if (!actionBtn.classList.contains('hubgee2-working')) {
-                actionBtn.textContent = modeLabel(mode);
-            }
-        });
-        const pressState = armWorkingOnPress(actionBtn);
+        // The wrapper accepts the touch, but the button visually updates
+        const pressState = armWorkingOnPress(wrap, actionBtn);
 
-        actionBtn.addEventListener('contextmenu', function (e) {
+        wrap.addEventListener('contextmenu', function (e) {
             e.preventDefault();
             const next = cycleMode();
             if (!actionBtn.classList.contains('hubgee2-working')) {
@@ -750,12 +605,7 @@
             showToast('Mode: ' + modeLabel(next), '#7c3aed');
         });
 
-        actionBtn.addEventListener('click', async function (e) {
-            e.preventDefault();
-
-            if (wasDragged()) return;
-            if (wasLongPressTriggered()) return;
-
+        async function triggerAction() {
             const incoming = gmGet(KEYS.payload, '');
 
             if (!incoming || typeof incoming !== 'string') {
@@ -797,7 +647,91 @@
                 pressState.resetWorking(modeLabel(getMode()));
                 showToast('Action failed', '#b91c1c');
             }
-        });
+        }
+
+        let isDragging = false;
+        let isLongPress = false;
+        let longPressTimer;
+
+        const handleStart = (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            if (e.cancelable) e.preventDefault();
+
+            isDragging = true;
+            isLongPress = false;
+            let hasMoved = false;
+
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const initialPos = { ...savedPos };
+
+            wrap.style.transform = `translate(${initialPos.x}px, ${initialPos.y}px) scale(0.92)`;
+
+            longPressTimer = setTimeout(() => {
+                isLongPress = true;
+                const next = cycleMode();
+                if (!actionBtn.classList.contains('hubgee2-working')) {
+                    actionBtn.textContent = modeLabel(next);
+                }
+                showToast('Mode: ' + modeLabel(next), '#7c3aed');
+
+                wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.1)`;
+                setTimeout(() => {
+                    if (isDragging) {
+                        wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
+                    }
+                }, 150);
+            }, 550);
+
+            const handleMove = (moveEvent) => {
+                if (moveEvent.cancelable) moveEvent.preventDefault();
+                const dx = moveEvent.clientX - startX;
+                const dy = moveEvent.clientY - startY;
+
+                if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+                    hasMoved = true;
+                    clearTimeout(longPressTimer);
+
+                    let nextX = initialPos.x + dx;
+                    let nextY = initialPos.y + dy;
+
+                    const rect = wrap.getBoundingClientRect();
+                    // Divide by scale factor to get raw bounds
+                    const maxX = window.innerWidth - (rect.width / 0.92);
+                    const maxY = window.innerHeight - (rect.height / 0.92);
+
+                    savedPos.x = Math.max(5, Math.min(nextX, maxX - 5));
+                    savedPos.y = Math.max(5, Math.min(nextY, maxY - 5));
+
+                    wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
+                }
+            };
+
+            const handleEnd = () => {
+                clearTimeout(longPressTimer);
+                window.removeEventListener('pointermove', handleMove);
+                window.removeEventListener('pointerup', handleEnd);
+                window.removeEventListener('pointercancel', handleEnd);
+
+                isDragging = false;
+                wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.0)`;
+
+                if (hasMoved) {
+                    gmSet(KEYS.btnPos, savedPos);
+                } else if (!isLongPress) {
+                    triggerAction();
+                }
+            };
+
+            window.addEventListener('pointermove', handleMove, { passive: false });
+            window.addEventListener('pointerup', handleEnd, { passive: false });
+            window.addEventListener('pointercancel', handleEnd, { passive: false });
+        };
+
+        wrap.addEventListener('pointerdown', handleStart);
+
+        // Expose state so the resize listener can dynamically fix the bounds
+        wrap.hubgeePos = savedPos;
 
         log('Action button added at', location.href, 'mode =', getMode());
     }
@@ -816,6 +750,26 @@
                 ensureGitHubButton();
             }
         }, 500);
+
+        // Auto-Recovery on resize / rotation (from YTMNT logic)
+        window.addEventListener('resize', () => {
+            const wrap = document.getElementById('hubgee2-github-container');
+            if (wrap && wrap.hubgeePos) {
+                const rect = wrap.getBoundingClientRect();
+                const maxX = window.innerWidth - rect.width;
+                const maxY = window.innerHeight - rect.height;
+
+                let clampedX = Math.max(5, Math.min(wrap.hubgeePos.x, maxX - 5));
+                let clampedY = Math.max(5, Math.min(wrap.hubgeePos.y, maxY - 5));
+
+                if (clampedX !== wrap.hubgeePos.x || clampedY !== wrap.hubgeePos.y) {
+                    wrap.hubgeePos.x = clampedX;
+                    wrap.hubgeePos.y = clampedY;
+                    wrap.style.transform = `translate(${wrap.hubgeePos.x}px, ${wrap.hubgeePos.y}px) scale(1.0)`;
+                    gmSet(KEYS.btnPos, wrap.hubgeePos);
+                }
+            }
+        }, { passive: true });
     }
 
     injectStyles();
