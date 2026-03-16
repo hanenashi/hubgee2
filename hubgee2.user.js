@@ -8,7 +8,7 @@
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
 // @match        https://github.com/*
-// @icon         https://github.githubassets.com/favicons/favicon.svg
+// @icon         https://raw.githubusercontent.com/hanenashi/hubgee2/main/icon.svg
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-idle
