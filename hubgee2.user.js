@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      0.5
-// @description  Copy code blocks from Gemini directly into the GitHub web editor without using the clipboard.
+// @version      0.6
+// @description  Copy code blocks from Gemini directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
 // @match        https://github.com/*
@@ -25,8 +25,11 @@
 
     const KEYS = {
         payload: 'hubgee2_payload',
-        btnPos: 'hubgee2_btn_pos'
+        btnPos: 'hubgee2_btn_pos',
+        mode: 'hubgee2_mode'
     };
+
+    const MODES = ['paste', 'download'];
 
     function log(...args) {
         console.log('[Hubgee2]', ...args);
@@ -53,6 +56,30 @@
             warn('GM_setValue failed for', key, err);
             return false;
         }
+    }
+
+    function getMode() {
+        const mode = gmGet(KEYS.mode, 'paste');
+        return MODES.includes(mode) ? mode : 'paste';
+    }
+
+    function setMode(mode) {
+        if (!MODES.includes(mode)) return;
+        gmSet(KEYS.mode, mode);
+    }
+
+    function cycleMode() {
+        const current = getMode();
+        const index = MODES.indexOf(current);
+        const next = MODES[(index + 1) % MODES.length];
+        setMode(next);
+        log('Mode changed to', next);
+        return next;
+    }
+
+    function modeLabel(mode) {
+        if (mode === 'download') return 'Download';
+        return 'Paste';
     }
 
     function showToast(message, bgColor) {
@@ -189,6 +216,65 @@
         };
     }
 
+    function addLongPressModeCycle(el, onModeChanged) {
+        let pressTimer = null;
+        let longPressTriggered = false;
+        let startX = 0;
+        let startY = 0;
+        const holdMs = 550;
+        const moveThreshold = 8;
+
+        function clear() {
+            if (pressTimer) {
+                clearTimeout(pressTimer);
+                pressTimer = null;
+            }
+        }
+
+        el.addEventListener('touchstart', function (e) {
+            if (!e.touches || !e.touches.length) return;
+            const t = e.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+            longPressTriggered = false;
+
+            clear();
+            pressTimer = setTimeout(function () {
+                longPressTriggered = true;
+                const next = cycleMode();
+                if (typeof onModeChanged === 'function') onModeChanged(next);
+                showToast('Mode: ' + modeLabel(next), '#7c3aed');
+            }, holdMs);
+        }, { passive: true });
+
+        el.addEventListener('touchmove', function (e) {
+            if (!pressTimer || !e.touches || !e.touches.length) return;
+            const t = e.touches[0];
+            const dx = t.clientX - startX;
+            const dy = t.clientY - startY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > moveThreshold) {
+                clear();
+            }
+        }, { passive: true });
+
+        el.addEventListener('touchend', function () {
+            setTimeout(function () {
+                longPressTriggered = false;
+            }, 0);
+            clear();
+        });
+
+        el.addEventListener('touchcancel', function () {
+            longPressTriggered = false;
+            clear();
+        });
+
+        return function wasLongPressTriggered() {
+            return longPressTriggered;
+        };
+    }
+
     function findGeminiCodeText(block) {
         if (!block) return '';
         let raw = block.innerText || block.textContent || '';
@@ -255,7 +341,7 @@
         return null;
     }
 
-    function injectIntoGitHubEditor(newText) {
+    async function injectIntoGitHubEditor(newText) {
         const target = locateGitHubEditor();
 
         if (!target) {
@@ -316,34 +402,32 @@
 
                 if (sel) sel.addRange(range);
 
-                // A tiny delay helps CodeMirror settle focus before insertText.
-                return new Promise(function (resolve) {
+                const ok = await new Promise(function (resolve) {
                     requestAnimationFrame(function () {
                         try {
-                            const ok = document.execCommand('selectAll') &&
-                                       document.execCommand('insertText', false, newText);
-
-                            if (ok) {
-                                log('Contenteditable inject OK via execCommand');
-                                resolve(true);
-                                return;
-                            }
-
-                            target.textContent = newText;
-                            target.dispatchEvent(new InputEvent('input', {
-                                bubbles: true,
-                                data: newText,
-                                inputType: 'insertText'
-                            }));
-
-                            log('Contenteditable inject OK via fallback');
-                            resolve(true);
+                            const worked = document.execCommand('selectAll') &&
+                                           document.execCommand('insertText', false, newText);
+                            resolve(!!worked);
                         } catch (err) {
-                            warn('Contenteditable inject failed:', err);
                             resolve(false);
                         }
                     });
                 });
+
+                if (ok) {
+                    log('Contenteditable inject OK via execCommand');
+                    return true;
+                }
+
+                target.textContent = newText;
+                target.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    data: newText,
+                    inputType: 'insertText'
+                }));
+
+                log('Contenteditable inject OK via fallback');
+                return true;
             } catch (err) {
                 warn('Contenteditable inject failed:', err);
             }
@@ -351,6 +435,30 @@
 
         showToast('Paste failed', '#b91c1c');
         return false;
+    }
+
+    function downloadPayload(text) {
+        try {
+            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'code.txt';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+
+            setTimeout(function () {
+                URL.revokeObjectURL(url);
+                if (a.parentNode) a.parentNode.removeChild(a);
+            }, 1000);
+
+            log('Download triggered, len =', text.length);
+            return true;
+        } catch (err) {
+            warn('Download failed:', err);
+            return false;
+        }
     }
 
     function initGemini() {
@@ -413,7 +521,6 @@
 
     function ensureGitHubButton() {
         const onEditPage = window.location.pathname.includes('/edit/');
-
         const existing = document.getElementById('hubgee2-github-container');
 
         if (!onEditPage) {
@@ -421,7 +528,11 @@
             return;
         }
 
-        if (existing) return;
+        if (existing) {
+            const btn = existing.querySelector('button');
+            if (btn) btn.textContent = modeLabel(getMode());
+            return;
+        }
 
         const wrap = document.createElement('div');
         wrap.id = 'hubgee2-github-container';
@@ -430,30 +541,42 @@
         wrap.style.bottom = '20px';
         wrap.style.zIndex = '2147483645';
 
-        const pasteBtn = document.createElement('button');
-        pasteBtn.textContent = 'Paste';
-        pasteBtn.style.padding = '16px 20px';
-        pasteBtn.style.background = '#dc2626';
-        pasteBtn.style.color = '#fff';
-        pasteBtn.style.border = 'none';
-        pasteBtn.style.borderRadius = '8px';
-        pasteBtn.style.fontWeight = 'bold';
-        pasteBtn.style.fontSize = '16px';
-        pasteBtn.style.fontFamily = 'sans-serif';
-        pasteBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
-        pasteBtn.style.cursor = 'pointer';
+        const actionBtn = document.createElement('button');
+        actionBtn.textContent = modeLabel(getMode());
+        actionBtn.style.padding = '16px 20px';
+        actionBtn.style.background = '#dc2626';
+        actionBtn.style.color = '#fff';
+        actionBtn.style.border = 'none';
+        actionBtn.style.borderRadius = '8px';
+        actionBtn.style.fontWeight = 'bold';
+        actionBtn.style.fontSize = '16px';
+        actionBtn.style.fontFamily = 'sans-serif';
+        actionBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
+        actionBtn.style.cursor = 'pointer';
+        actionBtn.style.userSelect = 'none';
+        actionBtn.style.webkitUserSelect = 'none';
 
-        wrap.appendChild(pasteBtn);
+        wrap.appendChild(actionBtn);
         document.body.appendChild(wrap);
 
         applySavedPosition(wrap, KEYS.btnPos);
         const wasDragged = makeDraggable(wrap, wrap, KEYS.btnPos);
+        const wasLongPressTriggered = addLongPressModeCycle(actionBtn, function (mode) {
+            actionBtn.textContent = modeLabel(mode);
+        });
 
-        log('Paste button added at', location.href);
-
-        pasteBtn.addEventListener('click', async function (e) {
+        actionBtn.addEventListener('contextmenu', function (e) {
             e.preventDefault();
+            const next = cycleMode();
+            actionBtn.textContent = modeLabel(next);
+            showToast('Mode: ' + modeLabel(next), '#7c3aed');
+        });
+
+        actionBtn.addEventListener('click', async function (e) {
+            e.preventDefault();
+
             if (wasDragged()) return;
+            if (wasLongPressTriggered()) return;
 
             const incoming = gmGet(KEYS.payload, '');
 
@@ -463,7 +586,18 @@
                 return;
             }
 
-            log('Pasting payload, len =', incoming.length);
+            const mode = getMode();
+            log('Action mode =', mode, 'len =', incoming.length);
+
+            if (mode === 'download') {
+                const ok = downloadPayload(incoming);
+                if (ok) {
+                    showToast('Downloaded ' + incoming.length + ' chars', '#166534');
+                } else {
+                    showToast('Download failed', '#b91c1c');
+                }
+                return;
+            }
 
             const ok = await injectIntoGitHubEditor(incoming);
             if (ok) {
@@ -473,6 +607,8 @@
                 showToast('Paste failed', '#b91c1c');
             }
         });
+
+        log('Action button added at', location.href, 'mode =', getMode());
     }
 
     function initGitHub() {
