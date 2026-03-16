@@ -1,14 +1,19 @@
 // ==UserScript==
-// @name         Hubgee - The Tactical Nuke Bridge DEBUG
-// @namespace    http://tampermonkey.net/
-// @version      2.4-debug
-// @description  Hubgee with popup debug window, safer injection, and test tools.
+// @name         Hubgee2 - Tactical Code Bridge
+// @namespace    https://github.com/hanenashi
+// @version      0.1
+// @description  Send code blocks from Gemini directly into the GitHub web editor. Clipboard-free mobile workflow.
+// @author       hanenashi
 // @match        https://gemini.google.com/*
 // @match        https://github.com/*/edit/*
+// @icon         https://github.githubassets.com/favicons/favicon.svg
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @updateURL    https://raw.githubusercontent.com/hanenashi/hubgee/main/hubgee.user.js
-// @downloadURL  https://raw.githubusercontent.com/hanenashi/hubgee/main/hubgee.user.js
+// @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/hanenashi/hubgee2/main/hubgee2.user.js
+// @downloadURL  https://raw.githubusercontent.com/hanenashi/hubgee2/main/hubgee2.user.js
+// @homepageURL  https://github.com/hanenashi/hubgee2
+// @supportURL   https://github.com/hanenashi/hubgee2/issues
 // ==/UserScript==
 
 (function () {
