@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      0.4
+// @version      0.5
 // @description  Copy code blocks from Gemini directly into the GitHub web editor without using the clipboard.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
-// @match        https://github.com/*/edit/*
+// @match        https://github.com/*
 // @icon         https://github.githubassets.com/favicons/favicon.svg
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -110,20 +110,35 @@
     function makeDraggable(el, handle, saveKey) {
         let isDragging = false;
         let moved = false;
+        let startClientX = 0;
+        let startClientY = 0;
         let offsetX = 0;
         let offsetY = 0;
+        const dragThreshold = 6;
 
         function start(clientX, clientY) {
             const rect = el.getBoundingClientRect();
             isDragging = true;
             moved = false;
+            startClientX = clientX;
+            startClientY = clientY;
             offsetX = clientX - rect.left;
             offsetY = clientY - rect.top;
         }
 
         function move(clientX, clientY) {
             if (!isDragging) return;
+
+            const dx = clientX - startClientX;
+            const dy = clientY - startClientY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (!moved && distance < dragThreshold) {
+                return;
+            }
+
             moved = true;
+
             const pos = clampToViewport(el, clientX - offsetX, clientY - offsetY);
             el.style.left = pos.x + 'px';
             el.style.top = pos.y + 'px';
@@ -134,8 +149,11 @@
         function end() {
             if (!isDragging) return;
             isDragging = false;
-            const rect = el.getBoundingClientRect();
-            gmSet(saveKey, { x: rect.left, y: rect.top });
+
+            if (moved) {
+                const rect = el.getBoundingClientRect();
+                gmSet(saveKey, { x: rect.left, y: rect.top });
+            }
         }
 
         handle.addEventListener('mousedown', function (e) {
@@ -298,23 +316,34 @@
 
                 if (sel) sel.addRange(range);
 
-                const ok = document.execCommand('selectAll') &&
-                           document.execCommand('insertText', false, newText);
+                // A tiny delay helps CodeMirror settle focus before insertText.
+                return new Promise(function (resolve) {
+                    requestAnimationFrame(function () {
+                        try {
+                            const ok = document.execCommand('selectAll') &&
+                                       document.execCommand('insertText', false, newText);
 
-                if (ok) {
-                    log('Contenteditable inject OK via execCommand');
-                    return true;
-                }
+                            if (ok) {
+                                log('Contenteditable inject OK via execCommand');
+                                resolve(true);
+                                return;
+                            }
 
-                target.textContent = newText;
-                target.dispatchEvent(new InputEvent('input', {
-                    bubbles: true,
-                    data: newText,
-                    inputType: 'insertText'
-                }));
+                            target.textContent = newText;
+                            target.dispatchEvent(new InputEvent('input', {
+                                bubbles: true,
+                                data: newText,
+                                inputType: 'insertText'
+                            }));
 
-                log('Contenteditable inject OK via fallback');
-                return true;
+                            log('Contenteditable inject OK via fallback');
+                            resolve(true);
+                        } catch (err) {
+                            warn('Contenteditable inject failed:', err);
+                            resolve(false);
+                        }
+                    });
+                });
             } catch (err) {
                 warn('Contenteditable inject failed:', err);
             }
@@ -332,7 +361,7 @@
 
             const codeBlocks = document.querySelectorAll('pre');
 
-            codeBlocks.forEach(function (block, index) {
+            codeBlocks.forEach(function (block) {
                 if (block.classList.contains('hubgee2-injected')) return;
                 block.classList.add('hubgee2-injected');
 
@@ -379,64 +408,87 @@
                     block.parentNode.insertBefore(btn, block);
                 }
             });
-        }, 1500);
+        }, 1200);
+    }
+
+    function ensureGitHubButton() {
+        const onEditPage = window.location.pathname.includes('/edit/');
+
+        const existing = document.getElementById('hubgee2-github-container');
+
+        if (!onEditPage) {
+            if (existing) existing.remove();
+            return;
+        }
+
+        if (existing) return;
+
+        const wrap = document.createElement('div');
+        wrap.id = 'hubgee2-github-container';
+        wrap.style.position = 'fixed';
+        wrap.style.right = '20px';
+        wrap.style.bottom = '20px';
+        wrap.style.zIndex = '2147483645';
+
+        const pasteBtn = document.createElement('button');
+        pasteBtn.textContent = 'Paste';
+        pasteBtn.style.padding = '16px 20px';
+        pasteBtn.style.background = '#dc2626';
+        pasteBtn.style.color = '#fff';
+        pasteBtn.style.border = 'none';
+        pasteBtn.style.borderRadius = '8px';
+        pasteBtn.style.fontWeight = 'bold';
+        pasteBtn.style.fontSize = '16px';
+        pasteBtn.style.fontFamily = 'sans-serif';
+        pasteBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
+        pasteBtn.style.cursor = 'pointer';
+
+        wrap.appendChild(pasteBtn);
+        document.body.appendChild(wrap);
+
+        applySavedPosition(wrap, KEYS.btnPos);
+        const wasDragged = makeDraggable(wrap, wrap, KEYS.btnPos);
+
+        log('Paste button added at', location.href);
+
+        pasteBtn.addEventListener('click', async function (e) {
+            e.preventDefault();
+            if (wasDragged()) return;
+
+            const incoming = gmGet(KEYS.payload, '');
+
+            if (!incoming || typeof incoming !== 'string') {
+                warn('Payload empty or invalid');
+                showToast('Buffer empty', '#b91c1c');
+                return;
+            }
+
+            log('Pasting payload, len =', incoming.length);
+
+            const ok = await injectIntoGitHubEditor(incoming);
+            if (ok) {
+                showToast('Pasted ' + incoming.length + ' chars', '#166534');
+            } else {
+                warn('Paste failed');
+                showToast('Paste failed', '#b91c1c');
+            }
+        });
     }
 
     function initGitHub() {
         log('GitHub init at', location.href);
 
+        ensureGitHubButton();
+        setInterval(ensureGitHubButton, 800);
+
+        let lastUrl = location.href;
         setInterval(function () {
-            if (!window.location.href.includes('/edit/')) return;
-            if (document.getElementById('hubgee2-github-container')) return;
-
-            const wrap = document.createElement('div');
-            wrap.id = 'hubgee2-github-container';
-            wrap.style.position = 'fixed';
-            wrap.style.right = '20px';
-            wrap.style.bottom = '20px';
-            wrap.style.zIndex = '2147483645';
-
-            const pasteBtn = document.createElement('button');
-            pasteBtn.textContent = 'Paste';
-            pasteBtn.style.padding = '16px 20px';
-            pasteBtn.style.background = '#dc2626';
-            pasteBtn.style.color = '#fff';
-            pasteBtn.style.border = 'none';
-            pasteBtn.style.borderRadius = '8px';
-            pasteBtn.style.fontWeight = 'bold';
-            pasteBtn.style.fontSize = '16px';
-            pasteBtn.style.fontFamily = 'sans-serif';
-            pasteBtn.style.boxShadow = '0 4px 10px rgba(0,0,0,.35)';
-            pasteBtn.style.cursor = 'pointer';
-
-            wrap.appendChild(pasteBtn);
-            document.body.appendChild(wrap);
-
-            applySavedPosition(wrap, KEYS.btnPos);
-            const wasDragged = makeDraggable(wrap, wrap, KEYS.btnPos);
-
-            pasteBtn.addEventListener('click', function (e) {
-                e.preventDefault();
-                if (wasDragged()) return;
-
-                const incoming = gmGet(KEYS.payload, '');
-
-                if (!incoming || typeof incoming !== 'string') {
-                    warn('Payload empty or invalid');
-                    showToast('Buffer empty', '#b91c1c');
-                    return;
-                }
-
-                log('Pasting payload, len =', incoming.length);
-
-                const ok = injectIntoGitHubEditor(incoming);
-                if (ok) {
-                    showToast('Pasted ' + incoming.length + ' chars', '#166534');
-                } else {
-                    warn('Paste failed');
-                }
-            });
-        }, 1200);
+            if (location.href !== lastUrl) {
+                lastUrl = location.href;
+                log('GitHub URL changed to', lastUrl);
+                ensureGitHubButton();
+            }
+        }, 500);
     }
 
     if (isGemini) initGemini();
