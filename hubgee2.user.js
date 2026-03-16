@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      0.6
-// @description  Copy code blocks from Gemini directly into the GitHub web editor or download them as a file, without using the clipboard.
+// @version      0.7
+// @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
+// @match        https://chatgpt.com/*
+// @match        https://chat.openai.com/*
 // @match        https://github.com/*
 // @icon         https://github.githubassets.com/favicons/favicon.svg
 // @grant        GM_setValue
@@ -19,9 +21,12 @@
 (function () {
     'use strict';
 
-    const isGemini = window.location.hostname === 'gemini.google.com' &&
-                     window.location.pathname.startsWith('/app/');
-    const isGitHub = window.location.hostname === 'github.com';
+    const host = window.location.hostname;
+    const path = window.location.pathname;
+
+    const isGemini = host === 'gemini.google.com' && path.startsWith('/app/');
+    const isChatGPT = host === 'chatgpt.com' || host === 'chat.openai.com';
+    const isGitHub = host === 'github.com';
 
     const KEYS = {
         payload: 'hubgee2_payload',
@@ -160,9 +165,7 @@
             const dy = clientY - startClientY;
             const distance = Math.sqrt(dx * dx + dy * dy);
 
-            if (!moved && distance < dragThreshold) {
-                return;
-            }
+            if (!moved && distance < dragThreshold) return;
 
             moved = true;
 
@@ -253,9 +256,7 @@
             const dx = t.clientX - startX;
             const dy = t.clientY - startY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > moveThreshold) {
-                clear();
-            }
+            if (dist > moveThreshold) clear();
         }, { passive: true });
 
         el.addEventListener('touchend', function () {
@@ -273,13 +274,6 @@
         return function wasLongPressTriggered() {
             return longPressTriggered;
         };
-    }
-
-    function findGeminiCodeText(block) {
-        if (!block) return '';
-        let raw = block.innerText || block.textContent || '';
-        raw = raw.replace(/\u00a0/g, ' ');
-        return raw;
     }
 
     function locateGitHubEditor() {
@@ -461,6 +455,50 @@
         }
     }
 
+    function setPayloadFromText(text, sourceName, btn) {
+        const ok = gmSet(KEYS.payload, text);
+
+        if (!ok) {
+            warn('Failed to store payload from', sourceName);
+            showToast('Copy failed', '#b91c1c');
+            return;
+        }
+
+        log(sourceName + ' copied payload, len =', text.length);
+
+        if (btn) {
+            const oldText = btn.textContent;
+            const oldBg = btn.style.background;
+            btn.textContent = 'Copied';
+            btn.style.background = '#15803d';
+
+            setTimeout(function () {
+                btn.textContent = oldText;
+                btn.style.background = oldBg;
+            }, 1600);
+        }
+
+        showToast('Copied ' + text.length + ' chars', '#166534');
+    }
+
+    function createSourceButton(label) {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.style.display = 'block';
+        btn.style.width = '100%';
+        btn.style.padding = '14px';
+        btn.style.marginBottom = '8px';
+        btn.style.background = '#2563eb';
+        btn.style.color = '#fff';
+        btn.style.border = 'none';
+        btn.style.borderRadius = '6px';
+        btn.style.fontSize = '16px';
+        btn.style.fontWeight = 'bold';
+        btn.style.fontFamily = 'sans-serif';
+        btn.style.cursor = 'pointer';
+        return btn;
+    }
+
     function initGemini() {
         log('Gemini init at', location.href);
 
@@ -473,47 +511,62 @@
                 if (block.classList.contains('hubgee2-injected')) return;
                 block.classList.add('hubgee2-injected');
 
-                const btn = document.createElement('button');
-                btn.textContent = 'Copy';
-                btn.style.display = 'block';
-                btn.style.width = '100%';
-                btn.style.padding = '14px';
-                btn.style.marginBottom = '8px';
-                btn.style.background = '#2563eb';
-                btn.style.color = '#fff';
-                btn.style.border = 'none';
-                btn.style.borderRadius = '6px';
-                btn.style.fontSize = '16px';
-                btn.style.fontWeight = 'bold';
-                btn.style.fontFamily = 'sans-serif';
-                btn.style.cursor = 'pointer';
-
+                const btn = createSourceButton('Copy');
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
-
-                    const rawCode = findGeminiCodeText(block);
-                    const ok = gmSet(KEYS.payload, rawCode);
-
-                    if (!ok) {
-                        warn('Failed to store payload');
-                        showToast('Copy failed', '#b91c1c');
-                        return;
-                    }
-
-                    log('Copied payload, len =', rawCode.length);
-
-                    btn.textContent = 'Copied';
-                    btn.style.background = '#15803d';
-                    showToast('Copied ' + rawCode.length + ' chars', '#166534');
-
-                    setTimeout(function () {
-                        btn.textContent = 'Copy';
-                        btn.style.background = '#2563eb';
-                    }, 1600);
+                    let rawCode = block.innerText || block.textContent || '';
+                    rawCode = rawCode.replace(/\u00a0/g, ' ');
+                    setPayloadFromText(rawCode, 'Gemini', btn);
                 });
 
                 if (block.parentNode) {
                     block.parentNode.insertBefore(btn, block);
+                }
+            });
+        }, 1200);
+    }
+
+    function extractChatGPTCodeText(pre) {
+        const cmReadonly = pre.querySelector('.cm-content.q9tKkq_readonly');
+        if (cmReadonly) {
+            return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\u00a0/g, ' ');
+        }
+
+        const cmContent = pre.querySelector('.cm-content');
+        if (cmContent) {
+            return (cmContent.innerText || cmContent.textContent || '').replace(/\u00a0/g, ' ');
+        }
+
+        return (pre.innerText || pre.textContent || '').replace(/\u00a0/g, ' ');
+    }
+
+    function initChatGPT() {
+        log('ChatGPT init at', location.href);
+
+        setInterval(function () {
+            const codeBlocks = document.querySelectorAll('pre');
+
+            codeBlocks.forEach(function (pre) {
+                if (pre.classList.contains('hubgee2-injected')) return;
+
+                const hasCodeViewer =
+                    pre.querySelector('#code-block-viewer') ||
+                    pre.querySelector('.cm-editor') ||
+                    pre.querySelector('.cm-content');
+
+                if (!hasCodeViewer) return;
+
+                pre.classList.add('hubgee2-injected');
+
+                const btn = createSourceButton('Copy');
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const rawCode = extractChatGPTCodeText(pre);
+                    setPayloadFromText(rawCode, 'ChatGPT', btn);
+                });
+
+                if (pre.parentNode) {
+                    pre.parentNode.insertBefore(btn, pre);
                 }
             });
         }, 1200);
@@ -628,5 +681,6 @@
     }
 
     if (isGemini) initGemini();
+    if (isChatGPT) initChatGPT();
     if (isGitHub) initGitHub();
 })();
