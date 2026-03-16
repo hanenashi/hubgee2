@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.1
+// @version      1.2
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -27,8 +27,7 @@
     const host = window.location.hostname;
     const path = window.location.pathname;
 
-    // Use .includes() to safely catch 'www.' or any other subdomains mobile browsers throw at us
-    const isGemini = host.includes('gemini.google.com'); 
+    const isGemini = host.includes('gemini.google.com');
     const isChatGPT = host.includes('chatgpt.com') || host.includes('openai.com');
     const isGitHub = host.includes('github.com');
 
@@ -590,7 +589,7 @@
                 block.classList.add('hubgee2-injected');
 
                 const blockNum = index + 1;
-                const defaultLabel = \`📦 Copy Block #\${blockNum}\`;
+                const defaultLabel = `📦 Copy Block #${blockNum}`;
                 const btn = createSourceButton(defaultLabel);
                 const pressState = armWorkingOnPress(btn);
 
@@ -602,10 +601,10 @@
 
                     try {
                         let rawCode = block.innerText || block.textContent || '';
-                        rawCode = rawCode.replace(/\\u00a0/g, ' ');
+                        rawCode = rawCode.replace(/\u00a0/g, ' ');
                         const ok = await setPayloadFromText(rawCode, 'Gemini');
 
-                        pressState.resetWorking(ok ? \`✅ Copied #\${blockNum}\` : defaultLabel);
+                        pressState.resetWorking(ok ? `✅ Copied #${blockNum}` : defaultLabel);
 
                         setTimeout(function () {
                             btn.textContent = defaultLabel;
@@ -627,15 +626,15 @@
     function extractChatGPTCodeText(pre) {
         const cmReadonly = pre.querySelector('.cm-content.q9tKkq_readonly');
         if (cmReadonly) {
-            return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\\u00a0/g, ' ');
+            return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\u00a0/g, ' ');
         }
 
         const cmContent = pre.querySelector('.cm-content');
         if (cmContent) {
-            return (cmContent.innerText || cmContent.textContent || '').replace(/\\u00a0/g, ' ');
+            return (cmContent.innerText || cmContent.textContent || '').replace(/\u00a0/g, ' ');
         }
 
-        return (pre.innerText || pre.textContent || '').replace(/\\u00a0/g, ' ');
+        return (pre.innerText || pre.textContent || '').replace(/\u00a0/g, ' ');
     }
 
     function initChatGPT() {
@@ -657,7 +656,7 @@
                 pre.classList.add('hubgee2-injected');
 
                 const blockNum = index + 1;
-                const defaultLabel = \`📦 Copy Block #\${blockNum}\`;
+                const defaultLabel = `📦 Copy Block #${blockNum}`;
                 const btn = createSourceButton(defaultLabel);
                 const pressState = armWorkingOnPress(btn);
 
@@ -671,7 +670,7 @@
                         const rawCode = extractChatGPTCodeText(pre);
                         const ok = await setPayloadFromText(rawCode, 'ChatGPT');
 
-                        pressState.resetWorking(ok ? \`✅ Copied #\${blockNum}\` : defaultLabel);
+                        pressState.resetWorking(ok ? `✅ Copied #${blockNum}` : defaultLabel);
 
                         setTimeout(function () {
                             btn.textContent = defaultLabel;
