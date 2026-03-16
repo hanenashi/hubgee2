@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      0.9
+// @version      1.0
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
@@ -581,32 +581,34 @@
 
             const codeBlocks = document.querySelectorAll('pre');
 
-            codeBlocks.forEach(function (block) {
+            codeBlocks.forEach(function (block, index) {
                 if (block.classList.contains('hubgee2-injected')) return;
                 block.classList.add('hubgee2-injected');
 
-                const btn = createSourceButton('Copy');
+                const blockNum = index + 1;
+                const defaultLabel = \`📦 Copy Block #\${blockNum}\`;
+                const btn = createSourceButton(defaultLabel);
                 const pressState = armWorkingOnPress(btn);
 
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
 
                     pressState.confirmWorking();
-                    await nextFrame();
+                    await new Promise(r => setTimeout(r, 150));
 
                     try {
                         let rawCode = block.innerText || block.textContent || '';
-                        rawCode = rawCode.replace(/\u00a0/g, ' ');
+                        rawCode = rawCode.replace(/\\u00a0/g, ' ');
                         const ok = await setPayloadFromText(rawCode, 'Gemini');
 
-                        pressState.resetWorking(ok ? 'Copied' : 'Copy');
+                        pressState.resetWorking(ok ? \`✅ Copied #\${blockNum}\` : defaultLabel);
 
                         setTimeout(function () {
-                            btn.textContent = 'Copy';
+                            btn.textContent = defaultLabel;
                         }, 1600);
                     } catch (err) {
                         warn('Gemini copy failed:', err);
-                        pressState.resetWorking('Copy');
+                        pressState.resetWorking(defaultLabel);
                         showToast('Copy failed', '#b91c1c');
                     }
                 });
@@ -621,15 +623,15 @@
     function extractChatGPTCodeText(pre) {
         const cmReadonly = pre.querySelector('.cm-content.q9tKkq_readonly');
         if (cmReadonly) {
-            return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\u00a0/g, ' ');
+            return (cmReadonly.innerText || cmReadonly.textContent || '').replace(/\\u00a0/g, ' ');
         }
 
         const cmContent = pre.querySelector('.cm-content');
         if (cmContent) {
-            return (cmContent.innerText || cmContent.textContent || '').replace(/\u00a0/g, ' ');
+            return (cmContent.innerText || cmContent.textContent || '').replace(/\\u00a0/g, ' ');
         }
 
-        return (pre.innerText || pre.textContent || '').replace(/\u00a0/g, ' ');
+        return (pre.innerText || pre.textContent || '').replace(/\\u00a0/g, ' ');
     }
 
     function initChatGPT() {
@@ -638,7 +640,7 @@
         setInterval(function () {
             const codeBlocks = document.querySelectorAll('pre');
 
-            codeBlocks.forEach(function (pre) {
+            codeBlocks.forEach(function (pre, index) {
                 if (pre.classList.contains('hubgee2-injected')) return;
 
                 const hasCodeViewer =
@@ -650,27 +652,29 @@
 
                 pre.classList.add('hubgee2-injected');
 
-                const btn = createSourceButton('Copy');
+                const blockNum = index + 1;
+                const defaultLabel = \`📦 Copy Block #\${blockNum}\`;
+                const btn = createSourceButton(defaultLabel);
                 const pressState = armWorkingOnPress(btn);
 
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
 
                     pressState.confirmWorking();
-                    await nextFrame();
+                    await new Promise(r => setTimeout(r, 150));
 
                     try {
                         const rawCode = extractChatGPTCodeText(pre);
                         const ok = await setPayloadFromText(rawCode, 'ChatGPT');
 
-                        pressState.resetWorking(ok ? 'Copied' : 'Copy');
+                        pressState.resetWorking(ok ? \`✅ Copied #\${blockNum}\` : defaultLabel);
 
                         setTimeout(function () {
-                            btn.textContent = 'Copy';
+                            btn.textContent = defaultLabel;
                         }, 1600);
                     } catch (err) {
                         warn('ChatGPT copy failed:', err);
-                        pressState.resetWorking('Copy');
+                        pressState.resetWorking(defaultLabel);
                         showToast('Copy failed', '#b91c1c');
                     }
                 });
