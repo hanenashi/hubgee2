@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      0.7
+// @version      0.8
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
@@ -117,6 +117,29 @@
         setTimeout(function () {
             if (toast.parentNode) toast.parentNode.removeChild(toast);
         }, 2000);
+    }
+
+    function nextFrame() {
+        return new Promise(function (resolve) {
+            requestAnimationFrame(function () {
+                resolve();
+            });
+        });
+    }
+
+    function setButtonWorking(btn, working, finalLabel) {
+        if (!btn) return;
+
+        if (working) {
+            btn.dataset.hubgeePrevLabel = btn.textContent;
+            btn.textContent = 'Working...';
+            btn.classList.add('hubgee2-working');
+            btn.disabled = true;
+        } else {
+            btn.classList.remove('hubgee2-working');
+            btn.disabled = false;
+            btn.textContent = finalLabel || btn.dataset.hubgeePrevLabel || btn.textContent;
+        }
     }
 
     function clampToViewport(el, x, y) {
@@ -274,6 +297,41 @@
         return function wasLongPressTriggered() {
             return longPressTriggered;
         };
+    }
+
+    function injectStyles() {
+        if (document.getElementById('hubgee2-style')) return;
+
+        const style = document.createElement('style');
+        style.id = 'hubgee2-style';
+        style.textContent = `
+            .hubgee2-btn {
+                transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, opacity 0.14s ease;
+                will-change: transform;
+            }
+            .hubgee2-btn:hover {
+                transform: translateY(-1px);
+                filter: brightness(1.04);
+            }
+            .hubgee2-btn:active {
+                transform: scale(0.97);
+                filter: brightness(0.96);
+            }
+            .hubgee2-btn.hubgee2-working {
+                animation: hubgee2Pulse 0.9s ease-in-out infinite;
+                cursor: progress !important;
+                opacity: 0.96;
+            }
+            .hubgee2-btn:disabled {
+                pointer-events: none;
+            }
+            @keyframes hubgee2Pulse {
+                0%   { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25); }
+                50%  { transform: scale(1.03); box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+                100% { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25); }
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     function locateGitHubEditor() {
@@ -455,35 +513,24 @@
         }
     }
 
-    function setPayloadFromText(text, sourceName, btn) {
+    async function setPayloadFromText(text, sourceName) {
         const ok = gmSet(KEYS.payload, text);
 
         if (!ok) {
             warn('Failed to store payload from', sourceName);
             showToast('Copy failed', '#b91c1c');
-            return;
+            return false;
         }
 
         log(sourceName + ' copied payload, len =', text.length);
-
-        if (btn) {
-            const oldText = btn.textContent;
-            const oldBg = btn.style.background;
-            btn.textContent = 'Copied';
-            btn.style.background = '#15803d';
-
-            setTimeout(function () {
-                btn.textContent = oldText;
-                btn.style.background = oldBg;
-            }, 1600);
-        }
-
         showToast('Copied ' + text.length + ' chars', '#166534');
+        return true;
     }
 
     function createSourceButton(label) {
         const btn = document.createElement('button');
         btn.textContent = label;
+        btn.className = 'hubgee2-btn';
         btn.style.display = 'block';
         btn.style.width = '100%';
         btn.style.padding = '14px';
@@ -496,6 +543,7 @@
         btn.style.fontWeight = 'bold';
         btn.style.fontFamily = 'sans-serif';
         btn.style.cursor = 'pointer';
+        btn.style.boxShadow = '0 4px 10px rgba(0,0,0,.18)';
         return btn;
     }
 
@@ -512,11 +560,27 @@
                 block.classList.add('hubgee2-injected');
 
                 const btn = createSourceButton('Copy');
-                btn.addEventListener('click', function (e) {
+                btn.addEventListener('click', async function (e) {
                     e.preventDefault();
-                    let rawCode = block.innerText || block.textContent || '';
-                    rawCode = rawCode.replace(/\u00a0/g, ' ');
-                    setPayloadFromText(rawCode, 'Gemini', btn);
+
+                    setButtonWorking(btn, true);
+                    await nextFrame();
+
+                    try {
+                        let rawCode = block.innerText || block.textContent || '';
+                        rawCode = rawCode.replace(/\u00a0/g, ' ');
+                        const ok = await setPayloadFromText(rawCode, 'Gemini');
+
+                        setButtonWorking(btn, false, ok ? 'Copied' : 'Copy');
+
+                        setTimeout(function () {
+                            btn.textContent = 'Copy';
+                        }, 1600);
+                    } catch (err) {
+                        warn('Gemini copy failed:', err);
+                        setButtonWorking(btn, false, 'Copy');
+                        showToast('Copy failed', '#b91c1c');
+                    }
                 });
 
                 if (block.parentNode) {
@@ -559,10 +623,26 @@
                 pre.classList.add('hubgee2-injected');
 
                 const btn = createSourceButton('Copy');
-                btn.addEventListener('click', function (e) {
+                btn.addEventListener('click', async function (e) {
                     e.preventDefault();
-                    const rawCode = extractChatGPTCodeText(pre);
-                    setPayloadFromText(rawCode, 'ChatGPT', btn);
+
+                    setButtonWorking(btn, true);
+                    await nextFrame();
+
+                    try {
+                        const rawCode = extractChatGPTCodeText(pre);
+                        const ok = await setPayloadFromText(rawCode, 'ChatGPT');
+
+                        setButtonWorking(btn, false, ok ? 'Copied' : 'Copy');
+
+                        setTimeout(function () {
+                            btn.textContent = 'Copy';
+                        }, 1600);
+                    } catch (err) {
+                        warn('ChatGPT copy failed:', err);
+                        setButtonWorking(btn, false, 'Copy');
+                        showToast('Copy failed', '#b91c1c');
+                    }
                 });
 
                 if (pre.parentNode) {
@@ -583,7 +663,9 @@
 
         if (existing) {
             const btn = existing.querySelector('button');
-            if (btn) btn.textContent = modeLabel(getMode());
+            if (btn && !btn.classList.contains('hubgee2-working')) {
+                btn.textContent = modeLabel(getMode());
+            }
             return;
         }
 
@@ -596,6 +678,7 @@
 
         const actionBtn = document.createElement('button');
         actionBtn.textContent = modeLabel(getMode());
+        actionBtn.className = 'hubgee2-btn';
         actionBtn.style.padding = '16px 20px';
         actionBtn.style.background = '#dc2626';
         actionBtn.style.color = '#fff';
@@ -615,13 +698,17 @@
         applySavedPosition(wrap, KEYS.btnPos);
         const wasDragged = makeDraggable(wrap, wrap, KEYS.btnPos);
         const wasLongPressTriggered = addLongPressModeCycle(actionBtn, function (mode) {
-            actionBtn.textContent = modeLabel(mode);
+            if (!actionBtn.classList.contains('hubgee2-working')) {
+                actionBtn.textContent = modeLabel(mode);
+            }
         });
 
         actionBtn.addEventListener('contextmenu', function (e) {
             e.preventDefault();
             const next = cycleMode();
-            actionBtn.textContent = modeLabel(next);
+            if (!actionBtn.classList.contains('hubgee2-working')) {
+                actionBtn.textContent = modeLabel(next);
+            }
             showToast('Mode: ' + modeLabel(next), '#7c3aed');
         });
 
@@ -642,22 +729,35 @@
             const mode = getMode();
             log('Action mode =', mode, 'len =', incoming.length);
 
-            if (mode === 'download') {
-                const ok = downloadPayload(incoming);
-                if (ok) {
-                    showToast('Downloaded ' + incoming.length + ' chars', '#166534');
-                } else {
-                    showToast('Download failed', '#b91c1c');
-                }
-                return;
-            }
+            setButtonWorking(actionBtn, true);
+            await nextFrame();
 
-            const ok = await injectIntoGitHubEditor(incoming);
-            if (ok) {
-                showToast('Pasted ' + incoming.length + ' chars', '#166534');
-            } else {
-                warn('Paste failed');
-                showToast('Paste failed', '#b91c1c');
+            try {
+                if (mode === 'download') {
+                    const ok = downloadPayload(incoming);
+                    setButtonWorking(actionBtn, false, modeLabel(getMode()));
+
+                    if (ok) {
+                        showToast('Downloaded ' + incoming.length + ' chars', '#166534');
+                    } else {
+                        showToast('Download failed', '#b91c1c');
+                    }
+                    return;
+                }
+
+                const ok = await injectIntoGitHubEditor(incoming);
+                setButtonWorking(actionBtn, false, modeLabel(getMode()));
+
+                if (ok) {
+                    showToast('Pasted ' + incoming.length + ' chars', '#166534');
+                } else {
+                    warn('Paste failed');
+                    showToast('Paste failed', '#b91c1c');
+                }
+            } catch (err) {
+                warn('Action failed:', err);
+                setButtonWorking(actionBtn, false, modeLabel(getMode()));
+                showToast('Action failed', '#b91c1c');
             }
         });
 
@@ -679,6 +779,8 @@
             }
         }, 500);
     }
+
+    injectStyles();
 
     if (isGemini) initGemini();
     if (isChatGPT) initChatGPT();
