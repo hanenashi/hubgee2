@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.6
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes live-generation detection.
+// @version      1.7
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -99,38 +99,41 @@
     }
 
     // ==========================================
-    // GENERATION DETECTOR LOGIC
+    // HYBRID GENERATION DETECTOR
     // ==========================================
     function isBlockGenerating(block, isGPT) {
+        const now = Date.now();
+        const currentLen = block.innerText.length;
+        
+        // 1. UNIVERSAL MUTATION TRACKER (The most robust check)
+        if (block._hubgeeLastLen !== currentLen) {
+            block._hubgeeLastLen = currentLen;
+            block._hubgeeLastChange = now;
+        }
+        const recentlyChanged = (now - (block._hubgeeLastChange || 0)) < 1500;
+
+        // Shared global context
+        const allPres = document.querySelectorAll('pre');
+        const isLastBlock = allPres[allPres.length - 1] === block;
+
         if (isGPT) {
-            // Check for the animate-spin SVG in the code block header or the streaming class
-            const hasSpinner = block.parentElement && block.parentElement.querySelector('svg.animate-spin');
-            const isStreaming = block.closest('.result-streaming');
-            return !!hasSpinner || !!isStreaming;
+            // 2. GPT LAYERED HEURISTICS
+            const msgContainer = block.closest('[data-message-author-role="assistant"], article, [role="article"]') || document;
+            
+            // Known visual cues
+            const hasSpinner = !!(block.parentElement && block.parentElement.querySelector('svg.animate-spin'));
+            const isStreaming = !!block.closest('.result-streaming');
+            const hasStopBtn = !!msgContainer.querySelector('button[aria-label*="stop" i]');
+            
+            // Check for the absence of OpenAI's native copy button
+            const wrapper = block.parentElement && block.parentElement.parentElement;
+            const hasNativeCopy = !!(wrapper && wrapper.querySelector('button[aria-label="Copy" i]'));
+
+            return recentlyChanged || hasSpinner || isStreaming || (hasStopBtn && isLastBlock && !hasNativeCopy);
         } else {
-            // Gemini requires a heuristic approach
-            let isChanging = false;
-            const currentLen = block.innerText.length;
-            
-            // 1. Text length monitor
-            if (block._hubgeeLastLen !== currentLen) {
-                block._hubgeeLastLen = currentLen;
-                block._hubgeeLastChange = Date.now();
-                isChanging = true;
-            } else if (Date.now() - (block._hubgeeLastChange || 0) < 2000) {
-                // Keep it locked for 2s after last char to catch slow API chunks
-                isChanging = true;
-            }
-            
-            // 2. Global Stop button check
-            const stopBtn = document.querySelector('button[aria-label="Stop generating"], button[aria-label="Stop stream"]');
-            if (stopBtn) {
-                const allPres = document.querySelectorAll('pre');
-                if (allPres[allPres.length - 1] === block) {
-                    isChanging = true;
-                }
-            }
-            return isChanging;
+            // 3. GEMINI LAYERED HEURISTICS
+            const stopBtn = document.querySelector('button[aria-label*="stop" i], button[aria-label*="Stop stream" i]');
+            return recentlyChanged || (!!stopBtn && isLastBlock);
         }
     }
 
@@ -390,6 +393,7 @@
                     if (block.parentNode) block.parentNode.insertBefore(btn, block);
                 }
 
+                // Dynamic UI Update
                 const btn = block._hubgeeBtn;
                 if (btn && btn.dataset.hubgeePressArmed !== '1' && !btn.classList.contains('hubgee2-working') && !btn.textContent.includes('✅')) {
                     if (isGenerating) {
@@ -448,6 +452,7 @@
                 if (pre.parentNode) pre.parentNode.insertBefore(btn, pre);
             });
 
+            // Dynamic UI Update
             document.querySelectorAll('pre.hubgee2-injected').forEach(function (pre, index) {
                 const btn = pre._hubgeeBtn;
                 const isGenerating = isBlockGenerating(pre, true);
