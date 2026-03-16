@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      0.8
+// @version      0.9
 // @description  Copy code blocks from Gemini or ChatGPT directly into the GitHub web editor or download them as a file, without using the clipboard.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
@@ -83,8 +83,7 @@
     }
 
     function modeLabel(mode) {
-        if (mode === 'download') return 'Download';
-        return 'Paste';
+        return mode === 'download' ? 'Download' : 'Paste';
     }
 
     function showToast(message, bgColor) {
@@ -125,21 +124,6 @@
                 resolve();
             });
         });
-    }
-
-    function setButtonWorking(btn, working, finalLabel) {
-        if (!btn) return;
-
-        if (working) {
-            btn.dataset.hubgeePrevLabel = btn.textContent;
-            btn.textContent = 'Working...';
-            btn.classList.add('hubgee2-working');
-            btn.disabled = true;
-        } else {
-            btn.classList.remove('hubgee2-working');
-            btn.disabled = false;
-            btn.textContent = finalLabel || btn.dataset.hubgeePrevLabel || btn.textContent;
-        }
     }
 
     function clampToViewport(el, x, y) {
@@ -296,6 +280,48 @@
 
         return function wasLongPressTriggered() {
             return longPressTriggered;
+        };
+    }
+
+    function armWorkingOnPress(btn) {
+        if (!btn) return null;
+
+        function showWorkingSoon() {
+            if (btn.disabled) return;
+            btn.dataset.hubgeePressArmed = '1';
+            btn.dataset.hubgeePrevLabel = btn.textContent;
+            btn.textContent = 'Working...';
+            btn.classList.add('hubgee2-working');
+        }
+
+        function cancelWorkingSoon() {
+            if (btn.dataset.hubgeePressArmed !== '1') return;
+            btn.dataset.hubgeePressArmed = '0';
+            btn.classList.remove('hubgee2-working');
+            btn.textContent = btn.dataset.hubgeePrevLabel || btn.textContent;
+        }
+
+        btn.addEventListener('pointerdown', showWorkingSoon);
+        btn.addEventListener('mousedown', showWorkingSoon);
+        btn.addEventListener('touchstart', showWorkingSoon, { passive: true });
+
+        btn.addEventListener('pointerleave', cancelWorkingSoon);
+        btn.addEventListener('mouseleave', cancelWorkingSoon);
+        btn.addEventListener('touchcancel', cancelWorkingSoon, { passive: true });
+
+        return {
+            confirmWorking: function () {
+                btn.dataset.hubgeePressArmed = '0';
+                btn.disabled = true;
+                btn.textContent = 'Working...';
+                btn.classList.add('hubgee2-working');
+            },
+            resetWorking: function (label) {
+                btn.dataset.hubgeePressArmed = '0';
+                btn.disabled = false;
+                btn.classList.remove('hubgee2-working');
+                btn.textContent = label || btn.dataset.hubgeePrevLabel || btn.textContent;
+            }
         };
     }
 
@@ -560,10 +586,12 @@
                 block.classList.add('hubgee2-injected');
 
                 const btn = createSourceButton('Copy');
+                const pressState = armWorkingOnPress(btn);
+
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
 
-                    setButtonWorking(btn, true);
+                    pressState.confirmWorking();
                     await nextFrame();
 
                     try {
@@ -571,14 +599,14 @@
                         rawCode = rawCode.replace(/\u00a0/g, ' ');
                         const ok = await setPayloadFromText(rawCode, 'Gemini');
 
-                        setButtonWorking(btn, false, ok ? 'Copied' : 'Copy');
+                        pressState.resetWorking(ok ? 'Copied' : 'Copy');
 
                         setTimeout(function () {
                             btn.textContent = 'Copy';
                         }, 1600);
                     } catch (err) {
                         warn('Gemini copy failed:', err);
-                        setButtonWorking(btn, false, 'Copy');
+                        pressState.resetWorking('Copy');
                         showToast('Copy failed', '#b91c1c');
                     }
                 });
@@ -623,24 +651,26 @@
                 pre.classList.add('hubgee2-injected');
 
                 const btn = createSourceButton('Copy');
+                const pressState = armWorkingOnPress(btn);
+
                 btn.addEventListener('click', async function (e) {
                     e.preventDefault();
 
-                    setButtonWorking(btn, true);
+                    pressState.confirmWorking();
                     await nextFrame();
 
                     try {
                         const rawCode = extractChatGPTCodeText(pre);
                         const ok = await setPayloadFromText(rawCode, 'ChatGPT');
 
-                        setButtonWorking(btn, false, ok ? 'Copied' : 'Copy');
+                        pressState.resetWorking(ok ? 'Copied' : 'Copy');
 
                         setTimeout(function () {
                             btn.textContent = 'Copy';
                         }, 1600);
                     } catch (err) {
                         warn('ChatGPT copy failed:', err);
-                        setButtonWorking(btn, false, 'Copy');
+                        pressState.resetWorking('Copy');
                         showToast('Copy failed', '#b91c1c');
                     }
                 });
@@ -702,6 +732,7 @@
                 actionBtn.textContent = modeLabel(mode);
             }
         });
+        const pressState = armWorkingOnPress(actionBtn);
 
         actionBtn.addEventListener('contextmenu', function (e) {
             e.preventDefault();
@@ -729,13 +760,13 @@
             const mode = getMode();
             log('Action mode =', mode, 'len =', incoming.length);
 
-            setButtonWorking(actionBtn, true);
+            pressState.confirmWorking();
             await nextFrame();
 
             try {
                 if (mode === 'download') {
                     const ok = downloadPayload(incoming);
-                    setButtonWorking(actionBtn, false, modeLabel(getMode()));
+                    pressState.resetWorking(modeLabel(getMode()));
 
                     if (ok) {
                         showToast('Downloaded ' + incoming.length + ' chars', '#166534');
@@ -746,7 +777,7 @@
                 }
 
                 const ok = await injectIntoGitHubEditor(incoming);
-                setButtonWorking(actionBtn, false, modeLabel(getMode()));
+                pressState.resetWorking(modeLabel(getMode()));
 
                 if (ok) {
                     showToast('Pasted ' + incoming.length + ' chars', '#166534');
@@ -756,7 +787,7 @@
                 }
             } catch (err) {
                 warn('Action failed:', err);
-                setButtonWorking(actionBtn, false, modeLabel(getMode()));
+                pressState.resetWorking(modeLabel(getMode()));
                 showToast('Action failed', '#b91c1c');
             }
         });
