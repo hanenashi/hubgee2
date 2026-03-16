@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Tactical Code Bridge DEBUG
 // @namespace    https://github.com/hanenashi
-// @version      0.2
+// @version      0.3
 // @description  Send code blocks from Gemini directly into the GitHub web editor. Clipboard-free mobile workflow with on-page debug tools.
 // @author       hanenashi
 // @match        https://gemini.google.com/*
@@ -63,7 +63,7 @@
     }
 
     function saveLogs(logs) {
-        gmSet(KEYS.debugLogs, logs.slice(-400));
+        gmSet(KEYS.debugLogs, logs.slice(-500));
     }
 
     function appendDebugLine(body, line) {
@@ -132,11 +132,11 @@
         toast.style.transition = 'opacity 0.25s ease';
         document.body.appendChild(toast);
 
-        setTimeout(() => {
+        setTimeout(function () {
             toast.style.opacity = '0';
         }, 1800);
 
-        setTimeout(() => {
+        setTimeout(function () {
             if (toast.parentNode) toast.parentNode.removeChild(toast);
         }, 2200);
     }
@@ -295,6 +295,7 @@
             btn.style.padding = '4px 8px';
             btn.style.fontFamily = 'monospace';
             btn.style.fontSize = '12px';
+            btn.style.cursor = 'pointer';
             return btn;
         }
 
@@ -397,36 +398,72 @@
     }
 
     function locateGitHubEditor() {
-        const selectors = [
-            'textarea.file-editor-textarea',
-            'textarea[spellcheck="false"]',
-            'textarea',
-            '.cm-editor textarea',
-            '[data-testid="codemirror-editor"] textarea'
-        ];
+        const candidates = [];
 
-        const results = [];
-
-        for (let i = 0; i < selectors.length; i++) {
-            const sel = selectors[i];
-            const el = document.querySelector(sel);
-            if (el) {
-                results.push({
-                    selector: sel,
-                    tag: el.tagName,
-                    className: el.className || '',
-                    ok: true
-                });
-                return {
+        function add(selector) {
+            const els = document.querySelectorAll(selector);
+            els.forEach(function (el) {
+                candidates.push({
                     el: el,
-                    selector: sel,
+                    selector: selector,
+                    tag: el.tagName || '',
+                    className: el.className || '',
+                    ariaLabel: el.getAttribute('aria-label') || '',
+                    name: el.getAttribute('name') || ''
+                });
+            });
+        }
+
+        add('textarea.file-editor-textarea');
+        add('textarea[aria-label*="file editor" i]');
+        add('textarea[aria-label*="editor" i]');
+        add('.cm-editor textarea');
+        add('[data-testid="codemirror-editor"] textarea');
+        add('.cm-content[contenteditable="true"]');
+        add('[contenteditable="true"].cm-content');
+        add('[role="textbox"][contenteditable="true"]');
+        add('textarea');
+
+        const results = candidates.map(function (c) {
+            return {
+                selector: c.selector,
+                tag: c.tag,
+                className: c.className,
+                ariaLabel: c.ariaLabel,
+                name: c.name
+            };
+        });
+
+        for (const c of candidates) {
+            const cls = (c.className || '').toLowerCase();
+            const aria = (c.ariaLabel || '').toLowerCase();
+            const name = (c.name || '').toLowerCase();
+
+            const looksLikeCommitBox =
+                cls.includes('form-control') ||
+                aria.includes('commit') ||
+                aria.includes('description') ||
+                name.includes('message') ||
+                name.includes('description') ||
+                name.includes('filename');
+
+            if (looksLikeCommitBox) continue;
+
+            const looksLikeEditor =
+                c.selector !== 'textarea' ||
+                cls.includes('file-editor') ||
+                cls.includes('cm-') ||
+                aria.includes('editor') ||
+                aria.includes('code') ||
+                aria.includes('file');
+
+            if (looksLikeEditor) {
+                return {
+                    el: c.el,
+                    selector: c.selector,
                     results: results
                 };
             }
-            results.push({
-                selector: sel,
-                ok: false
-            });
         }
 
         return {
@@ -445,15 +482,7 @@
         const found = locateGitHubEditor();
         logDebug('Editor lookup', found.results);
 
-        let target = found.el;
-
-        if (!target && document.activeElement) {
-            target = document.activeElement;
-            logDebug('Fallback activeElement', {
-                tag: target.tagName || '',
-                className: target.className || ''
-            });
-        }
+        const target = found.el;
 
         if (!target) {
             logDebug('FAIL: no editor target found');
@@ -461,9 +490,21 @@
             return false;
         }
 
+        logDebug('Chosen editor target', {
+            selector: found.selector,
+            tag: target.tagName || '',
+            className: target.className || '',
+            ariaLabel: target.getAttribute('aria-label') || '',
+            name: target.getAttribute('name') || '',
+            isContentEditable: !!target.isContentEditable
+        });
+
         try {
             target.focus();
-            logDebug('Focus attempted', { tag: target.tagName });
+            logDebug('Focus attempted', {
+                tag: target.tagName,
+                selector: found.selector
+            });
         } catch (err) {
             logDebug('Focus failed', { error: String(err) });
         }
@@ -498,16 +539,36 @@
             }
         }
 
-        try {
-            const okSelect = document.execCommand('selectAll');
-            const okInsert = document.execCommand('insertText', false, newText);
-            logDebug('execCommand fallback', {
-                selectAll: okSelect,
-                insertText: okInsert
-            });
-            return !!okInsert;
-        } catch (err) {
-            logDebug('execCommand fallback failed', { error: String(err) });
+        if (target.isContentEditable) {
+            try {
+                target.focus();
+
+                const sel = window.getSelection();
+                if (sel) sel.removeAllRanges();
+
+                const range = document.createRange();
+                range.selectNodeContents(target);
+                range.collapse(true);
+
+                if (sel) sel.addRange(range);
+
+                const ok = document.execCommand('selectAll') && document.execCommand('insertText', false, newText);
+                logDebug('contenteditable execCommand result', { ok: ok });
+
+                if (!ok) {
+                    target.textContent = newText;
+                    target.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
+                        data: newText,
+                        inputType: 'insertText'
+                    }));
+                    logDebug('contenteditable textContent fallback used');
+                }
+
+                return true;
+            } catch (err) {
+                logDebug('contenteditable inject failed', { error: String(err) });
+            }
         }
 
         showToast('Injection failed', '#b91c1c');
@@ -671,7 +732,7 @@
                         logDebug('Payload JSON-unwrapped', { len: incoming.length });
                     }
                 } catch (err) {
-                    // Not JSON. Fine.
+                    // Not JSON, ignore.
                 }
 
                 triggerNukeEffects();
