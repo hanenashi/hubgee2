@@ -2,8 +2,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.12
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection and animated feedback.
+// @version      1.13
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection, animated feedback, and CodeMirror refocusing.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -278,6 +278,19 @@
         return null;
     }
 
+    function refocusGitHubEditor(target) {
+        try {
+            const cmInput = document.querySelector('.cm-editor textarea');
+            if (cmInput) {
+                cmInput.focus();
+                return;
+            }
+            if (target && typeof target.focus === 'function') {
+                target.focus();
+            }
+        } catch (err) {}
+    }
+
     async function injectIntoGitHubEditor(newText) {
         const target = locateGitHubEditor();
 
@@ -298,15 +311,20 @@
                 if (nativeSetter) nativeSetter.call(target, newText);
                 else target.value = newText;
 
-                target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
+                target.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    data: newText,
+                    inputType: 'insertText'
+                }));
                 target.dispatchEvent(new Event('change', { bubbles: true }));
                 ok = true;
             } catch (err) {}
         }
 
-        if (target.isContentEditable) {
+        if (!ok && target.isContentEditable) {
             try {
                 target.focus();
+
                 const sel = window.getSelection();
                 if (sel) sel.removeAllRanges();
 
@@ -314,39 +332,33 @@
                 range.selectNodeContents(target);
                 if (sel) sel.addRange(range);
 
-                // Attempt to feed CodeMirror a synthetic native paste event first
                 try {
                     const dt = new DataTransfer();
                     dt.setData('text/plain', newText);
-                    const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
+                    const pasteEvent = new ClipboardEvent('paste', {
+                        bubbles: true,
+                        cancelable: true,
+                        clipboardData: dt
+                    });
                     target.dispatchEvent(pasteEvent);
-                } catch(e) {}
+                } catch (e) {}
 
                 ok = await new Promise(resolve => {
                     requestAnimationFrame(() => {
                         try {
                             const worked = document.execCommand('insertText', false, newText);
                             resolve(!!worked);
-                        } catch (err) { resolve(false); }
+                        } catch (err) {
+                            resolve(false);
+                        }
                     });
                 });
 
-                if (!ok) {
-                    target.textContent = newText;
-                    target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
-                    ok = true;
+                if (ok) {
+                    setTimeout(() => refocusGitHubEditor(target), 30);
                 }
             } catch (err) {}
         }
-
-        // THE FIX: Forcibly break CodeMirror's stuck internal focus state
-        setTimeout(() => {
-            try { 
-                target.blur(); 
-                const cmTextArea = document.querySelector('.cm-editor textarea');
-                if (cmTextArea) cmTextArea.blur();
-            } catch (err) {}
-        }, 50);
 
         if (!ok) showToast('Paste failed', '#b91c1c');
         return ok;
@@ -521,7 +533,6 @@
 
         const wrap = document.createElement('div');
         wrap.id = 'hubgee2-github-container';
-        // THE FIX: Set explicit bounds so it doesn't swallow rogue screen taps
         wrap.style.cssText = `
             position: fixed; top: 0; left: 0; z-index: 2147483645;
             touch-action: none; user-select: none; -webkit-user-select: none;
