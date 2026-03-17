@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.17
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes bulletproof generation detection, animated feedback, and CodeMirror refocusing.
+// @version      1.18
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes EditContext crash prevention for Android.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -269,7 +269,7 @@
 
     function locateGitHubEditor() {
         const selectors = [
-            '.cm-content[contenteditable="true"]', // TOP PRIORITY
+            '.cm-content[contenteditable="true"]',
             'textarea.file-editor-textarea',
             'textarea[aria-label*="file editor" i]',
             'textarea[aria-label*="editor" i]',
@@ -309,21 +309,6 @@
         return null;
     }
 
-    function refocusGitHubEditor(target) {
-        try {
-            const cmInput = document.querySelector('.cm-editor textarea');
-            if (cmInput) {
-                cmInput.focus();
-                return;
-            }
-            if (target && typeof target.focus === 'function') {
-                target.focus();
-            }
-        } catch (err) {
-            warn('refocusGitHubEditor failed:', err);
-        }
-    }
-
     async function injectIntoGitHubEditor(newText) {
         const target = locateGitHubEditor();
 
@@ -359,12 +344,9 @@
             try {
                 target.focus();
 
-                const sel = window.getSelection();
-                if (sel) sel.removeAllRanges();
-
-                const range = document.createRange();
-                range.selectNodeContents(target);
-                if (sel) sel.addRange(range);
+                // NATIVE BROWSER SELECT ALL: This safely informs EditContext of the cursor change.
+                // DO NOT USE manual DOM Range creation here, or Chromium will crash on Android.
+                document.execCommand('selectAll');
 
                 try {
                     const dt = new DataTransfer();
@@ -372,8 +354,6 @@
                     const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
                     target.dispatchEvent(pasteEvent);
                     
-                    // If CodeMirror intercepted and handled the paste event, it will prevent default.
-                    // If it handled it, we DO NOT fire execCommand, preventing the double paste!
                     if (pasteEvent.defaultPrevented) {
                         ok = true;
                     }
@@ -393,7 +373,18 @@
                 }
 
                 if (ok) {
-                    setTimeout(() => refocusGitHubEditor(target), 30);
+                    // Force the mobile keyboard (IME) state to resync by explicitly blurring and refocusing
+                    setTimeout(() => {
+                        try {
+                            target.blur();
+                            const sel = window.getSelection();
+                            if (sel) sel.collapseToEnd();
+                        } catch(e) {}
+                        
+                        setTimeout(() => {
+                            try { target.focus(); } catch(e) {}
+                        }, 50);
+                    }, 50);
                 }
             } catch (err) {}
         }
