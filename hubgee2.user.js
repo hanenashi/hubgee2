@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.18
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes EditContext crash prevention for Android.
+// @version      1.19
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes CodeMirror 6 mobile IME sync to prevent jumping cursors and EditContext crashes.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -317,14 +317,45 @@
             return false;
         }
 
-        try {
-            target.focus();
-        } catch (err) {}
-
         let ok = false;
 
-        if (target.tagName === 'TEXTAREA') {
+        // STRATEGY 1: The CodeMirror 6 Hidden Textarea Heist (Fixes Jumping Cursors & Crashes)
+        const cmInput = document.querySelector('.cm-editor textarea');
+        if (cmInput && target.classList.contains('cm-content')) {
             try {
+                // Wipe visual DOM selection so CM knows we are starting fresh
+                target.focus();
+                document.execCommand('selectAll');
+                
+                // Shift to the mobile IME text field
+                cmInput.focus();
+                cmInput.select();
+                
+                // Try native insertion
+                let cmWorked = document.execCommand('insertText', false, newText);
+                
+                if (!cmWorked) {
+                    cmInput.value = newText;
+                    cmInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                
+                // Force EditContext detachment to prevent ghost selection crashes
+                setTimeout(() => { 
+                    try { cmInput.blur(); target.blur(); } catch(e){} 
+                }, 50);
+                
+                ok = true;
+            } catch (e) {
+                warn('CM6 textarea injection failed:', e);
+            }
+        }
+
+        // STRATEGY 2: Standard Textarea Fallback
+        if (!ok && target.tagName === 'TEXTAREA') {
+            try {
+                target.focus();
+                document.execCommand('selectAll');
+
                 const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
                 const nativeSetter = desc && desc.set ? desc.set : null;
 
@@ -336,56 +367,36 @@
 
                 target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
                 target.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                setTimeout(() => { try { target.blur(); } catch(e){} }, 50);
                 ok = true;
             } catch (err) {}
         }
 
+        // STRATEGY 3: Standard ContentEditable Fallback (Explicitly WITHOUT ClipboardEvent)
         if (!ok && target.isContentEditable) {
             try {
                 target.focus();
-
-                // NATIVE BROWSER SELECT ALL: This safely informs EditContext of the cursor change.
-                // DO NOT USE manual DOM Range creation here, or Chromium will crash on Android.
                 document.execCommand('selectAll');
 
-                try {
-                    const dt = new DataTransfer();
-                    dt.setData('text/plain', newText);
-                    const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
-                    target.dispatchEvent(pasteEvent);
-                    
-                    if (pasteEvent.defaultPrevented) {
-                        ok = true;
-                    }
-                } catch (e) {}
+                ok = await new Promise(resolve => {
+                    requestAnimationFrame(() => {
+                        try {
+                            const worked = document.execCommand('insertText', false, newText);
+                            resolve(!!worked);
+                        } catch (err) {
+                            resolve(false);
+                        }
+                    });
+                });
 
                 if (!ok) {
-                    ok = await new Promise(resolve => {
-                        requestAnimationFrame(() => {
-                            try {
-                                const worked = document.execCommand('insertText', false, newText);
-                                resolve(!!worked);
-                            } catch (err) {
-                                resolve(false);
-                            }
-                        });
-                    });
+                    target.textContent = newText;
+                    target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: newText }));
+                    ok = true;
                 }
 
-                if (ok) {
-                    // Force the mobile keyboard (IME) state to resync by explicitly blurring and refocusing
-                    setTimeout(() => {
-                        try {
-                            target.blur();
-                            const sel = window.getSelection();
-                            if (sel) sel.collapseToEnd();
-                        } catch(e) {}
-                        
-                        setTimeout(() => {
-                            try { target.focus(); } catch(e) {}
-                        }, 50);
-                    }, 50);
-                }
+                setTimeout(() => { try { target.blur(); } catch(e){} }, 50);
             } catch (err) {}
         }
 
