@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.15
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. (Telemetry & Debug Edition)
+// @version      1.16
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes bulletproof generation detection, animated feedback, and CodeMirror refocusing.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -81,8 +81,7 @@
     }
 
     function modeLabel(mode) {
-        return mode === 'download' ?
-            'Download' : 'Paste';
+        return mode === 'download' ? 'Download' : 'Paste';
     }
 
     function showToast(message, bgColor) {
@@ -121,6 +120,16 @@
         return new Promise(resolve => requestAnimationFrame(resolve));
     }
 
+    function isNodeVisible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+            return false;
+        }
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
     function isBlockGenerating(block, isGPT) {
         const now = Date.now();
         const currentLen = block.innerText.length;
@@ -135,27 +144,25 @@
         const isLastBlock = allPres[allPres.length - 1] === block;
 
         if (isGPT) {
-            const msgContainer = block.closest('[data-message-author-role="assistant"], article, [role="article"]') ||
-                document;
+            const msgContainer = block.closest('[data-message-author-role="assistant"], article, [role="article"]') || document;
             const hasSpinner = !!(block.parentElement && block.parentElement.querySelector('svg.animate-spin'));
             const isStreaming = !!block.closest('.result-streaming');
 
             let hasVisibleStopBtn = false;
             const stopBtns = msgContainer.querySelectorAll('button[aria-label*="stop" i]');
             stopBtns.forEach(btn => {
-                if (btn.offsetWidth > 0 || btn.offsetHeight > 0) hasVisibleStopBtn = true;
+                if (isNodeVisible(btn)) hasVisibleStopBtn = true;
             });
 
             const wrapper = block.parentElement && block.parentElement.parentElement;
             const hasNativeCopy = !!(wrapper && wrapper.querySelector('button[aria-label="Copy" i]'));
 
-            return recentlyChanged || hasSpinner || isStreaming ||
-                (hasVisibleStopBtn && isLastBlock && !hasNativeCopy);
+            return recentlyChanged || hasSpinner || isStreaming || (hasVisibleStopBtn && isLastBlock && !hasNativeCopy);
         } else {
             let hasVisibleStopBtn = false;
             const stopBtns = document.querySelectorAll('button[aria-label*="stop" i], button[aria-label*="Stop stream" i]');
             stopBtns.forEach(btn => {
-                if (btn.offsetWidth > 0 || btn.offsetHeight > 0) hasVisibleStopBtn = true;
+                if (isNodeVisible(btn)) hasVisibleStopBtn = true;
             });
 
             return recentlyChanged || (hasVisibleStopBtn && isLastBlock);
@@ -242,36 +249,24 @@
                 animation: hubgee2PopAnim 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
             }
             @keyframes hubgee2Pulse {
-                0%   { transform: scale(1);
-                box-shadow: 0 4px 10px rgba(0,0,0,.25); }
-                50%  { transform: scale(1.03);
-                box-shadow: 0 6px 18px rgba(0,0,0,.35); }
-                100% { transform: scale(1);
-                box-shadow: 0 4px 10px rgba(0,0,0,.25); }
+                0%   { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25); }
+                50%  { transform: scale(1.03); box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+                100% { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25); }
             }
             @keyframes hubgee2PulseSlow {
-                0%   { filter: brightness(1);
-                }
-                50%  { filter: brightness(1.15);
-                }
-                100% { filter: brightness(1);
-                }
+                0%   { filter: brightness(1); }
+                50%  { filter: brightness(1.15); }
+                100% { filter: brightness(1); }
             }
             @keyframes hubgee2PopAnim {
-                0% { transform: scale(1);
-                }
-                50% { transform: scale(1.08);
-                }
-                100% { transform: scale(1);
-                }
+                0% { transform: scale(1); }
+                50% { transform: scale(1.08); }
+                100% { transform: scale(1); }
             }
         `;
         document.head.appendChild(style);
     }
 
-    // ==========================================
-    // GITHUB EDITOR TELEMETRY SUITE
-    // ==========================================
     function locateGitHubEditor() {
         const selectors = [
             'textarea.file-editor-textarea',
@@ -279,6 +274,7 @@
             '[data-testid="codemirror-editor"] textarea',
             'textarea[aria-label*="file editor" i]',
             'textarea[aria-label*="editor" i]',
+            '.cm-content[contenteditable="true"]',
             'textarea'
         ];
 
@@ -300,7 +296,8 @@
                     name.includes('description') ||
                     name.includes('feedback') ||
                     name.includes('filename') ||
-                    id.includes('commit')
+                    id.includes('commit') ||
+                    id.includes('search')
                 ) {
                     continue;
                 }
@@ -312,162 +309,89 @@
         return null;
     }
 
-    function refocusGitHubEditor(target, caretMode = 'start') {
+    function refocusGitHubEditor(target) {
         try {
-            if (!target) return;
-
-            target.focus();
-
-            if (typeof target.setSelectionRange === 'function') {
-                if (caretMode === 'end') {
-                    const pos = target.value ? target.value.length : 0;
-                    target.setSelectionRange(pos, pos);
-                } else {
-                    target.setSelectionRange(0, 0);
-                }
+            const cmInput = document.querySelector('.cm-editor textarea');
+            if (cmInput) {
+                cmInput.focus();
+                return;
+            }
+            if (target && typeof target.focus === 'function') {
+                target.focus();
             }
         } catch (err) {
-            console.warn('[Hubgee2] refocusGitHubEditor failed:', err);
+            warn('refocusGitHubEditor failed:', err);
         }
-    }
-
-    function debugTargetSummary(target) {
-        if (!target) return 'none';
-
-        const parts = [
-            target.tagName ? target.tagName.toLowerCase() : '?'
-        ];
-
-        if (target.id) parts.push('#' + target.id);
-
-        const cls = typeof target.className === 'string'
-            ? target.className.trim().replace(/\s+/g, '.')
-            : '';
-
-        if (cls) parts.push('.' + cls);
-
-        const aria = target.getAttribute ? target.getAttribute('aria-label') : '';
-        if (aria) parts.push(`[aria="${aria}"]`);
-
-        return parts.join('');
     }
 
     async function injectIntoGitHubEditor(newText) {
         const target = locateGitHubEditor();
 
         if (!target) {
-            console.warn('[Hubgee2] No GitHub editor found');
             showToast('No GitHub editor found', '#b91c1c');
             return false;
         }
 
-        const summary = debugTargetSummary(target);
-        const ro = !!target.readOnly;
-        const dis = !!target.disabled;
-
-        console.log('[Hubgee2] Target found:', summary, {
-            readOnly: ro,
-            disabled: dis,
-            valueLength: typeof target.value === 'string' ? target.value.length : null
-        });
-
-        showToast(`Target: ${target.tagName.toLowerCase()} ro:${ro ? 'Y' : 'N'} dis:${dis ? 'Y' : 'N'}`, '#1d4ed8');
-
         try {
             target.focus();
-            console.log('[Hubgee2] focus ok');
-        } catch (err) {
-            console.warn('[Hubgee2] focus failed:', err);
-            showToast('Focus failed', '#b91c1c');
-            return false;
-        }
+        } catch (err) {}
 
-        await new Promise(resolve => setTimeout(resolve, 30));
+        let ok = false;
 
-        try {
-            if (typeof target.removeAttribute === 'function') {
-                target.removeAttribute('readonly');
-                target.removeAttribute('disabled');
-            }
-        } catch (err) {
-            console.warn('[Hubgee2] removeAttribute failed:', err);
-        }
-
-        try {
-            if (typeof target.setSelectionRange === 'function') {
-                const currentLen = typeof target.value === 'string' ? target.value.length : 0;
-                target.setSelectionRange(0, currentLen);
-                console.log('[Hubgee2] selection ok');
-            }
-        } catch (err) {
-            console.warn('[Hubgee2] selection failed:', err);
-        }
-
-        try {
-            if (typeof target.setRangeText === 'function') {
-                const currentLen = typeof target.value === 'string' ? target.value.length : 0;
-                target.setRangeText(newText, 0, currentLen, 'end');
-                console.log('[Hubgee2] setRangeText ok');
-            } else {
-                const proto = Object.getPrototypeOf(target);
-                const desc =
-                    Object.getOwnPropertyDescriptor(proto, 'value') ||
-                    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-
+        if (target.tagName === 'TEXTAREA') {
+            try {
+                const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
                 const nativeSetter = desc && desc.set ? desc.set : null;
 
                 if (nativeSetter) {
                     nativeSetter.call(target, newText);
-                    console.log('[Hubgee2] nativeSetter ok');
                 } else {
                     target.value = newText;
-                    console.log('[Hubgee2] direct value ok');
                 }
-            }
-        } catch (err) {
-            console.warn('[Hubgee2] value injection failed:', err);
-            showToast('Value write failed', '#b91c1c');
-            return false;
+
+                target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                ok = true;
+            } catch (err) {}
         }
 
-        try {
-            target.dispatchEvent(new InputEvent('beforeinput', {
-                bubbles: true,
-                cancelable: true,
-                inputType: 'insertText',
-                data: newText
-            }));
-            console.log('[Hubgee2] beforeinput ok');
-        } catch (err) {
-            console.warn('[Hubgee2] beforeinput failed:', err);
+        if (!ok && target.isContentEditable) {
+            try {
+                target.focus();
+
+                const sel = window.getSelection();
+                if (sel) sel.removeAllRanges();
+
+                const range = document.createRange();
+                range.selectNodeContents(target);
+                if (sel) sel.addRange(range);
+
+                try {
+                    const dt = new DataTransfer();
+                    dt.setData('text/plain', newText);
+                    const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
+                    target.dispatchEvent(pasteEvent);
+                } catch (e) {}
+
+                ok = await new Promise(resolve => {
+                    requestAnimationFrame(() => {
+                        try {
+                            const worked = document.execCommand('insertText', false, newText);
+                            resolve(!!worked);
+                        } catch (err) {
+                            resolve(false);
+                        }
+                    });
+                });
+
+                if (ok) {
+                    setTimeout(() => refocusGitHubEditor(target), 30);
+                }
+            } catch (err) {}
         }
 
-        try {
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-            console.log('[Hubgee2] input ok');
-        } catch (err) {
-            console.warn('[Hubgee2] input failed:', err);
-            showToast('Input event failed', '#b91c1c');
-            return false;
-        }
-
-        try {
-            target.dispatchEvent(new Event('change', { bubbles: true }));
-            console.log('[Hubgee2] change ok');
-        } catch (err) {
-            console.warn('[Hubgee2] change failed:', err);
-        }
-
-        try {
-            setTimeout(() => {
-                refocusGitHubEditor(target, 'start');
-            }, 30);
-        } catch (err) {
-            console.warn('[Hubgee2] refocus schedule failed:', err);
-        }
-
-        console.log('[Hubgee2] inject success');
-        return true;
+        if (!ok) showToast('Paste failed', '#b91c1c');
+        return ok;
     }
 
     function downloadPayload(text) {
@@ -647,7 +571,6 @@
         }, 1200);
     }
 
-
     function ensureGitHubButton() {
         if (!window.location.pathname.includes('/edit/')) {
             const existing = document.getElementById('hubgee2-github-container');
@@ -690,8 +613,8 @@
         }
 
         const initMaxX = Math.max(0, window.innerWidth - 110);
-
         const initMaxY = Math.max(0, window.innerHeight - 60);
+
         savedPos.x = Math.max(5, Math.min(savedPos.x, initMaxX));
         savedPos.y = Math.max(5, Math.min(savedPos.y, initMaxY));
 
@@ -720,7 +643,6 @@
         const pressState = {
             confirmWorking: function () {
                 actionBtn.dataset.hubgeePrevLabel = actionBtn.textContent;
-
                 actionBtn.disabled = true;
                 actionBtn.textContent = 'Working...';
                 actionBtn.classList.add('hubgee2-working');
@@ -728,19 +650,16 @@
             },
             resetWorking: function (label) {
                 actionBtn.disabled = false;
-
                 actionBtn.classList.remove('hubgee2-working');
                 actionBtn.textContent = label || actionBtn.dataset.hubgeePrevLabel || actionBtn.textContent;
-
+                
                 actionBtn.classList.add('hubgee2-pop');
                 setTimeout(() => actionBtn.classList.remove('hubgee2-pop'), 300);
-
             }
         };
 
         let isTouching = false;
         let isLongPress = false;
-
         let hasMoved = false;
         let longPressTimer;
 
@@ -759,10 +678,8 @@
                     wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
                 } else if (!isTouching) {
                     wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.0)`;
-     
                 }
             }, 150);
-
         }
 
         wrap.addEventListener('contextmenu', function (e) {
@@ -775,7 +692,6 @@
 
             if (!incoming || typeof incoming !== 'string') {
                 showToast('Buffer empty', '#b91c1c');
-
                 return;
             }
 
@@ -786,25 +702,16 @@
             try {
                 if (mode === 'download') {
                     const ok = downloadPayload(incoming);
-
                     pressState.resetWorking(modeLabel(getMode()));
                     showToast(ok ? `Downloaded ${incoming.length} chars` : 'Download failed', ok ? '#166534' : '#b91c1c');
                     return;
-
                 }
 
                 const ok = await injectIntoGitHubEditor(incoming);
-
                 pressState.resetWorking(modeLabel(getMode()));
-                // We don't show the success toast here anymore, it's handled by the injection block if successful, 
-                // but we will keep a fallback just in case the execution didn't throw an explicit error.
-                if (ok && !document.querySelector('.hubgee2-btn.hubgee2-pop')) {
-                    // Do nothing, the log handle is in the injection function
-                }
 
             } catch (err) {
                 pressState.resetWorking(modeLabel(getMode()));
-
                 showToast('Action failed', '#b91c1c');
             }
         }
@@ -820,7 +727,6 @@
 
             const startX = e.clientX;
             const startY = e.clientY;
-
             const initialPos = { ...savedPos };
 
             wrap.style.transform = `translate(${initialPos.x}px, ${initialPos.y}px) scale(0.92)`;
@@ -837,26 +743,21 @@
 
                 if (!hasMoved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
                     hasMoved = true;
-
                     clearTimeout(longPressTimer);
                 }
 
                 if (hasMoved) {
                     let nextX = initialPos.x + dx;
-
                     let nextY = initialPos.y + dy;
 
                     const rect = wrap.getBoundingClientRect();
                     const maxX = window.innerWidth - (rect.width / 0.92);
-
                     const maxY = window.innerHeight - (rect.height / 0.92);
 
                     savedPos.x = Math.max(5, Math.min(nextX, maxX - 5));
-
                     savedPos.y = Math.max(5, Math.min(nextY, maxY - 5));
 
                     wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
-
                 }
             };
 
@@ -872,10 +773,8 @@
 
                 if (hasMoved) {
                     gmSet(KEYS.btnPos, savedPos);
-
                 } else if (!isLongPress) {
                     triggerAction();
-
                     isLongPress = true;
                 }
             };
@@ -891,7 +790,6 @@
 
     function initGitHub() {
         ensureGitHubButton();
-
         setInterval(ensureGitHubButton, 800);
 
         let lastUrl = location.href;
@@ -909,20 +807,17 @@
                 const maxX = window.innerWidth - rect.width;
                 const maxY = window.innerHeight - rect.height;
 
-     
                 let clampedX = Math.max(5, Math.min(wrap.hubgeePos.x, maxX - 5));
                 let clampedY = Math.max(5, Math.min(wrap.hubgeePos.y, maxY - 5));
 
                 if (clampedX !== wrap.hubgeePos.x || clampedY !== wrap.hubgeePos.y) {
                     wrap.hubgeePos.x = clampedX;
-             
                     wrap.hubgeePos.y = clampedY;
                     wrap.style.transform = `translate(${wrap.hubgeePos.x}px, ${wrap.hubgeePos.y}px) scale(1.0)`;
                     gmSet(KEYS.btnPos, wrap.hubgeePos);
                 }
             }
         }, { passive: true });
-
     }
 
     injectStyles();
