@@ -1,4 +1,8 @@
-# Hubgee2 🚀
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hanenashi/hubgee2/main/icon.svg" alt="Hubgee2 Icon" width="120">
+</p>
+
+# Hubgee2
 
 **[📦 Install Hubgee2 Userscript](https://raw.githubusercontent.com/hanenashi/hubgee2/main/hubgee2.user.js)**
 
