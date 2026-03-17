@@ -2,8 +2,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.8
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection.
+// @version      1.10
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection and animated feedback.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -106,46 +106,36 @@
         const now = Date.now();
         const currentLen = block.innerText.length;
         
-        // 1. UNIVERSAL MUTATION TRACKER (The most robust check)
         if (block._hubgeeLastLen !== currentLen) {
             block._hubgeeLastLen = currentLen;
             block._hubgeeLastChange = now;
         }
         const recentlyChanged = (now - (block._hubgeeLastChange || 0)) < 1500;
 
-        // Shared global context
         const allPres = document.querySelectorAll('pre');
         const isLastBlock = allPres[allPres.length - 1] === block;
 
         if (isGPT) {
-            // 2. GPT LAYERED HEURISTICS
             const msgContainer = block.closest('[data-message-author-role="assistant"], article, [role="article"]') || document;
-            
-            // Known visual cues
             const hasSpinner = !!(block.parentElement && block.parentElement.querySelector('svg.animate-spin'));
             const isStreaming = !!block.closest('.result-streaming');
             
-            // Check for stop button and ensure it's actually visible
             let hasVisibleStopBtn = false;
             const stopBtns = msgContainer.querySelectorAll('button[aria-label*="stop" i]');
             stopBtns.forEach(btn => {
                 if (btn.offsetWidth > 0 || btn.offsetHeight > 0) hasVisibleStopBtn = true;
             });
             
-            // Check for the absence of OpenAI's native copy button
             const wrapper = block.parentElement && block.parentElement.parentElement;
             const hasNativeCopy = !!(wrapper && wrapper.querySelector('button[aria-label="Copy" i]'));
 
             return recentlyChanged || hasSpinner || isStreaming || (hasVisibleStopBtn && isLastBlock && !hasNativeCopy);
         } else {
-            // 3. GEMINI LAYERED HEURISTICS
             let hasVisibleStopBtn = false;
             const stopBtns = document.querySelectorAll('button[aria-label*="stop" i], button[aria-label*="Stop stream" i]');
             stopBtns.forEach(btn => {
-                // If the button has physical dimensions, it's actually visible on the screen
                 if (btn.offsetWidth > 0 || btn.offsetHeight > 0) hasVisibleStopBtn = true;
             });
-            
             return recentlyChanged || (hasVisibleStopBtn && isLastBlock);
         }
     }
@@ -182,12 +172,17 @@
                 visualTarget.disabled = true;
                 visualTarget.textContent = 'Working...';
                 visualTarget.classList.add('hubgee2-working');
+                visualTarget.classList.remove('hubgee2-pop');
             },
             resetWorking: function (label) {
                 visualTarget.dataset.hubgeePressArmed = '0';
                 visualTarget.disabled = false;
                 visualTarget.classList.remove('hubgee2-working');
                 visualTarget.textContent = label || visualTarget.dataset.hubgeePrevLabel || visualTarget.textContent;
+                
+                // Fire the success pop animation
+                visualTarget.classList.add('hubgee2-pop');
+                setTimeout(() => visualTarget.classList.remove('hubgee2-pop'), 300);
             }
         };
     }
@@ -207,8 +202,8 @@
                 filter: brightness(1.04);
             }
             .hubgee2-btn:not(:disabled):active {
-                transform: scale(0.97);
-                filter: brightness(0.96);
+                transform: scale(0.92);
+                filter: brightness(0.92);
             }
             .hubgee2-btn.hubgee2-working {
                 animation: hubgee2Pulse 0.9s ease-in-out infinite;
@@ -222,6 +217,9 @@
                 animation: hubgee2PulseSlow 2.5s ease-in-out infinite;
                 pointer-events: none;
             }
+            .hubgee2-pop {
+                animation: hubgee2PopAnim 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+            }
             @keyframes hubgee2Pulse {
                 0%   { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25); }
                 50%  { transform: scale(1.03); box-shadow: 0 6px 18px rgba(0,0,0,.35); }
@@ -231,6 +229,11 @@
                 0%   { filter: brightness(1); }
                 50%  { filter: brightness(1.15); }
                 100% { filter: brightness(1); }
+            }
+            @keyframes hubgee2PopAnim {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.08); }
+                100% { transform: scale(1); }
             }
         `;
         document.head.appendChild(style);
@@ -406,7 +409,6 @@
                     if (block.parentNode) block.parentNode.insertBefore(btn, block);
                 }
 
-                // Dynamic UI Update
                 const btn = block._hubgeeBtn;
                 if (btn && btn.dataset.hubgeePressArmed !== '1' && !btn.classList.contains('hubgee2-working') && !btn.textContent.includes('✅')) {
                     if (isGenerating) {
@@ -465,7 +467,6 @@
                 if (pre.parentNode) pre.parentNode.insertBefore(btn, pre);
             });
 
-            // Dynamic UI Update for ChatGPT
             document.querySelectorAll('pre.hubgee2-injected').forEach(function (pre, index) {
                 const btn = pre._hubgeeBtn;
                 const isGenerating = isBlockGenerating(pre, true);
@@ -538,16 +539,27 @@
                 actionBtn.disabled = true;
                 actionBtn.textContent = 'Working...';
                 actionBtn.classList.add('hubgee2-working');
+                actionBtn.classList.remove('hubgee2-pop');
             },
             resetWorking: function (label) {
                 actionBtn.disabled = false;
                 actionBtn.classList.remove('hubgee2-working');
                 actionBtn.textContent = label || actionBtn.dataset.hubgeePrevLabel || actionBtn.textContent;
+                
+                // Fire the success pop animation
+                actionBtn.classList.add('hubgee2-pop');
+                setTimeout(() => actionBtn.classList.remove('hubgee2-pop'), 300);
             }
         };
 
+        let isDragging = false;
+        let isLongPress = false;
+        let longPressTimer;
+
         wrap.addEventListener('contextmenu', function (e) {
             e.preventDefault();
+            if (isLongPress) return; 
+            
             const next = cycleMode();
             if (!actionBtn.classList.contains('hubgee2-working')) actionBtn.textContent = modeLabel(next);
             showToast('Mode: ' + modeLabel(next), '#7c3aed');
@@ -580,10 +592,6 @@
                 showToast('Action failed', '#b91c1c');
             }
         }
-
-        let isDragging = false;
-        let isLongPress = false;
-        let longPressTimer;
 
         const handleStart = (e) => {
             if (e.pointerType === 'mouse' && e.button !== 0) return;
