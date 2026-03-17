@@ -1,7 +1,8 @@
+
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.7
+// @version      1.8
 // @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -123,17 +124,29 @@
             // Known visual cues
             const hasSpinner = !!(block.parentElement && block.parentElement.querySelector('svg.animate-spin'));
             const isStreaming = !!block.closest('.result-streaming');
-            const hasStopBtn = !!msgContainer.querySelector('button[aria-label*="stop" i]');
+            
+            // Check for stop button and ensure it's actually visible
+            let hasVisibleStopBtn = false;
+            const stopBtns = msgContainer.querySelectorAll('button[aria-label*="stop" i]');
+            stopBtns.forEach(btn => {
+                if (btn.offsetWidth > 0 || btn.offsetHeight > 0) hasVisibleStopBtn = true;
+            });
             
             // Check for the absence of OpenAI's native copy button
             const wrapper = block.parentElement && block.parentElement.parentElement;
             const hasNativeCopy = !!(wrapper && wrapper.querySelector('button[aria-label="Copy" i]'));
 
-            return recentlyChanged || hasSpinner || isStreaming || (hasStopBtn && isLastBlock && !hasNativeCopy);
+            return recentlyChanged || hasSpinner || isStreaming || (hasVisibleStopBtn && isLastBlock && !hasNativeCopy);
         } else {
             // 3. GEMINI LAYERED HEURISTICS
-            const stopBtn = document.querySelector('button[aria-label*="stop" i], button[aria-label*="Stop stream" i]');
-            return recentlyChanged || (!!stopBtn && isLastBlock);
+            let hasVisibleStopBtn = false;
+            const stopBtns = document.querySelectorAll('button[aria-label*="stop" i], button[aria-label*="Stop stream" i]');
+            stopBtns.forEach(btn => {
+                // If the button has physical dimensions, it's actually visible on the screen
+                if (btn.offsetWidth > 0 || btn.offsetHeight > 0) hasVisibleStopBtn = true;
+            });
+            
+            return recentlyChanged || (hasVisibleStopBtn && isLastBlock);
         }
     }
 
@@ -452,7 +465,7 @@
                 if (pre.parentNode) pre.parentNode.insertBefore(btn, pre);
             });
 
-            // Dynamic UI Update
+            // Dynamic UI Update for ChatGPT
             document.querySelectorAll('pre.hubgee2-injected').forEach(function (pre, index) {
                 const btn = pre._hubgeeBtn;
                 const isGenerating = isBlockGenerating(pre, true);
