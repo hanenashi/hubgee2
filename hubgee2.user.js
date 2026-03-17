@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.10
+// @version      1.11
 // @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection and animated feedback.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -180,7 +180,6 @@
                 visualTarget.classList.remove('hubgee2-working');
                 visualTarget.textContent = label || visualTarget.dataset.hubgeePrevLabel || visualTarget.textContent;
                 
-                // Fire the success pop animation
                 visualTarget.classList.add('hubgee2-pop');
                 setTimeout(() => visualTarget.classList.remove('hubgee2-pop'), 300);
             }
@@ -546,23 +545,39 @@
                 actionBtn.classList.remove('hubgee2-working');
                 actionBtn.textContent = label || actionBtn.dataset.hubgeePrevLabel || actionBtn.textContent;
                 
-                // Fire the success pop animation
                 actionBtn.classList.add('hubgee2-pop');
                 setTimeout(() => actionBtn.classList.remove('hubgee2-pop'), 300);
             }
         };
 
-        let isDragging = false;
+        // Unified Lock Engine
+        let isTouching = false;
         let isLongPress = false;
+        let hasMoved = false;
         let longPressTimer;
 
-        wrap.addEventListener('contextmenu', function (e) {
-            e.preventDefault();
-            if (isLongPress) return; 
-            
+        function executeLongPress() {
+            // The deadbolt check: If we already toggled, or if we started dragging, abort.
+            if (isLongPress || hasMoved) return; 
+            isLongPress = true;
+
             const next = cycleMode();
             if (!actionBtn.classList.contains('hubgee2-working')) actionBtn.textContent = modeLabel(next);
             showToast('Mode: ' + modeLabel(next), '#7c3aed');
+
+            wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.1)`;
+            setTimeout(() => {
+                if (isTouching && !hasMoved) {
+                    wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
+                } else if (!isTouching) {
+                    wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.0)`;
+                }
+            }, 150);
+        }
+
+        wrap.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            executeLongPress();
         });
 
         async function triggerAction() {
@@ -597,9 +612,9 @@
             if (e.pointerType === 'mouse' && e.button !== 0) return;
             if (e.cancelable) e.preventDefault();
 
-            isDragging = true;
+            isTouching = true;
             isLongPress = false;
-            let hasMoved = false;
+            hasMoved = false;
 
             const startX = e.clientX;
             const startY = e.clientY;
@@ -608,15 +623,7 @@
             wrap.style.transform = `translate(${initialPos.x}px, ${initialPos.y}px) scale(0.92)`;
 
             longPressTimer = setTimeout(() => {
-                isLongPress = true;
-                const next = cycleMode();
-                if (!actionBtn.classList.contains('hubgee2-working')) actionBtn.textContent = modeLabel(next);
-                showToast('Mode: ' + modeLabel(next), '#7c3aed');
-
-                wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.1)`;
-                setTimeout(() => {
-                    if (isDragging) wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(0.92)`;
-                }, 150);
+                executeLongPress();
             }, 550);
 
             const handleMove = (moveEvent) => {
@@ -624,10 +631,12 @@
                 const dx = moveEvent.clientX - startX;
                 const dy = moveEvent.clientY - startY;
 
-                if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+                if (!hasMoved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
                     hasMoved = true;
                     clearTimeout(longPressTimer);
+                }
 
+                if (hasMoved) {
                     let nextX = initialPos.x + dx;
                     let nextY = initialPos.y + dy;
 
@@ -648,11 +657,15 @@
                 window.removeEventListener('pointerup', handleEnd);
                 window.removeEventListener('pointercancel', handleEnd);
 
-                isDragging = false;
+                isTouching = false;
                 wrap.style.transform = `translate(${savedPos.x}px, ${savedPos.y}px) scale(1.0)`;
 
-                if (hasMoved) gmSet(KEYS.btnPos, savedPos);
-                else if (!isLongPress) triggerAction();
+                if (hasMoved) {
+                    gmSet(KEYS.btnPos, savedPos);
+                } else if (!isLongPress) {
+                    triggerAction();
+                    isLongPress = true; // Lock out any rogue contextmenu events firing upon release
+                }
             };
 
             window.addEventListener('pointermove', handleMove, { passive: false });
