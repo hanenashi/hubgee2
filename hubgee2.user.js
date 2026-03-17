@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.11
+// @version      1.12
 // @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes hybrid live-generation detection and animated feedback.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -288,6 +288,8 @@
 
         try { target.focus(); } catch (err) {}
 
+        let ok = false;
+
         if (target.tagName === 'TEXTAREA') {
             try {
                 const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
@@ -298,7 +300,7 @@
 
                 target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
                 target.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
+                ok = true;
             } catch (err) {}
         }
 
@@ -310,27 +312,44 @@
 
                 const range = document.createRange();
                 range.selectNodeContents(target);
-                range.collapse(true);
                 if (sel) sel.addRange(range);
 
-                const ok = await new Promise(resolve => {
+                // Attempt to feed CodeMirror a synthetic native paste event first
+                try {
+                    const dt = new DataTransfer();
+                    dt.setData('text/plain', newText);
+                    const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
+                    target.dispatchEvent(pasteEvent);
+                } catch(e) {}
+
+                ok = await new Promise(resolve => {
                     requestAnimationFrame(() => {
                         try {
-                            const worked = document.execCommand('selectAll') && document.execCommand('insertText', false, newText);
+                            const worked = document.execCommand('insertText', false, newText);
                             resolve(!!worked);
                         } catch (err) { resolve(false); }
                     });
                 });
 
-                if (ok) return true;
-
-                target.textContent = newText;
-                target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
-                return true;
+                if (!ok) {
+                    target.textContent = newText;
+                    target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
+                    ok = true;
+                }
             } catch (err) {}
         }
-        showToast('Paste failed', '#b91c1c');
-        return false;
+
+        // THE FIX: Forcibly break CodeMirror's stuck internal focus state
+        setTimeout(() => {
+            try { 
+                target.blur(); 
+                const cmTextArea = document.querySelector('.cm-editor textarea');
+                if (cmTextArea) cmTextArea.blur();
+            } catch (err) {}
+        }, 50);
+
+        if (!ok) showToast('Paste failed', '#b91c1c');
+        return ok;
     }
 
     function downloadPayload(text) {
@@ -502,11 +521,13 @@
 
         const wrap = document.createElement('div');
         wrap.id = 'hubgee2-github-container';
+        // THE FIX: Set explicit bounds so it doesn't swallow rogue screen taps
         wrap.style.cssText = `
             position: fixed; top: 0; left: 0; z-index: 2147483645;
             touch-action: none; user-select: none; -webkit-user-select: none;
             transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
             cursor: pointer; -webkit-tap-highlight-color: transparent;
+            width: max-content; height: max-content; display: inline-block;
         `;
 
         let savedPos = gmGet(KEYS.btnPos, null);
@@ -550,14 +571,12 @@
             }
         };
 
-        // Unified Lock Engine
         let isTouching = false;
         let isLongPress = false;
         let hasMoved = false;
         let longPressTimer;
 
         function executeLongPress() {
-            // The deadbolt check: If we already toggled, or if we started dragging, abort.
             if (isLongPress || hasMoved) return; 
             isLongPress = true;
 
@@ -664,7 +683,7 @@
                     gmSet(KEYS.btnPos, savedPos);
                 } else if (!isLongPress) {
                     triggerAction();
-                    isLongPress = true; // Lock out any rogue contextmenu events firing upon release
+                    isLongPress = true; 
                 }
             };
 
