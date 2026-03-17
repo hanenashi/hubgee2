@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.16
+// @version      1.17
 // @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes bulletproof generation detection, animated feedback, and CodeMirror refocusing.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
@@ -269,12 +269,12 @@
 
     function locateGitHubEditor() {
         const selectors = [
+            '.cm-content[contenteditable="true"]', // TOP PRIORITY
             'textarea.file-editor-textarea',
-            '.cm-editor textarea',
-            '[data-testid="codemirror-editor"] textarea',
             'textarea[aria-label*="file editor" i]',
             'textarea[aria-label*="editor" i]',
-            '.cm-content[contenteditable="true"]',
+            '.cm-editor textarea',
+            '[data-testid="codemirror-editor"] textarea',
             'textarea'
         ];
 
@@ -371,18 +371,26 @@
                     dt.setData('text/plain', newText);
                     const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
                     target.dispatchEvent(pasteEvent);
+                    
+                    // If CodeMirror intercepted and handled the paste event, it will prevent default.
+                    // If it handled it, we DO NOT fire execCommand, preventing the double paste!
+                    if (pasteEvent.defaultPrevented) {
+                        ok = true;
+                    }
                 } catch (e) {}
 
-                ok = await new Promise(resolve => {
-                    requestAnimationFrame(() => {
-                        try {
-                            const worked = document.execCommand('insertText', false, newText);
-                            resolve(!!worked);
-                        } catch (err) {
-                            resolve(false);
-                        }
+                if (!ok) {
+                    ok = await new Promise(resolve => {
+                        requestAnimationFrame(() => {
+                            try {
+                                const worked = document.execCommand('insertText', false, newText);
+                                resolve(!!worked);
+                            } catch (err) {
+                                resolve(false);
+                            }
+                        });
                     });
-                });
+                }
 
                 if (ok) {
                     setTimeout(() => refocusGitHubEditor(target), 30);
@@ -390,7 +398,6 @@
             } catch (err) {}
         }
 
-        if (!ok) showToast('Paste failed', '#b91c1c');
         return ok;
     }
 
@@ -709,6 +716,7 @@
 
                 const ok = await injectIntoGitHubEditor(incoming);
                 pressState.resetWorking(modeLabel(getMode()));
+                showToast(ok ? `Pasted ${incoming.length} chars` : 'Paste failed', ok ? '#166534' : '#b91c1c');
 
             } catch (err) {
                 pressState.resetWorking(modeLabel(getMode()));
