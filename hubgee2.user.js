@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hubgee2 - Copy Paste Bridge
 // @namespace    https://github.com/hanenashi
-// @version      1.19
-// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Includes CodeMirror 6 mobile IME sync to prevent jumping cursors and EditContext crashes.
+// @version      1.20
+// @description  Copy code blocks from Gemini or ChatGPT directly into GitHub. Lean injection engine.
 // @author       hanenashi
 // @match        *://*.gemini.google.com/*
 // @match        *://gemini.google.com/*
@@ -305,7 +305,6 @@
                 return el;
             }
         }
-
         return null;
     }
 
@@ -317,45 +316,10 @@
             return false;
         }
 
-        let ok = false;
+        try { target.focus(); } catch (err) {}
 
-        // STRATEGY 1: The CodeMirror 6 Hidden Textarea Heist (Fixes Jumping Cursors & Crashes)
-        const cmInput = document.querySelector('.cm-editor textarea');
-        if (cmInput && target.classList.contains('cm-content')) {
+        if (target.tagName === 'TEXTAREA') {
             try {
-                // Wipe visual DOM selection so CM knows we are starting fresh
-                target.focus();
-                document.execCommand('selectAll');
-                
-                // Shift to the mobile IME text field
-                cmInput.focus();
-                cmInput.select();
-                
-                // Try native insertion
-                let cmWorked = document.execCommand('insertText', false, newText);
-                
-                if (!cmWorked) {
-                    cmInput.value = newText;
-                    cmInput.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                
-                // Force EditContext detachment to prevent ghost selection crashes
-                setTimeout(() => { 
-                    try { cmInput.blur(); target.blur(); } catch(e){} 
-                }, 50);
-                
-                ok = true;
-            } catch (e) {
-                warn('CM6 textarea injection failed:', e);
-            }
-        }
-
-        // STRATEGY 2: Standard Textarea Fallback
-        if (!ok && target.tagName === 'TEXTAREA') {
-            try {
-                target.focus();
-                document.execCommand('selectAll');
-
                 const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
                 const nativeSetter = desc && desc.set ? desc.set : null;
 
@@ -367,40 +331,30 @@
 
                 target.dispatchEvent(new InputEvent('input', { bubbles: true, data: newText, inputType: 'insertText' }));
                 target.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                setTimeout(() => { try { target.blur(); } catch(e){} }, 50);
-                ok = true;
-            } catch (err) {}
+                return true;
+            } catch (err) {
+                return false;
+            }
         }
 
-        // STRATEGY 3: Standard ContentEditable Fallback (Explicitly WITHOUT ClipboardEvent)
-        if (!ok && target.isContentEditable) {
+        if (target.isContentEditable) {
             try {
                 target.focus();
                 document.execCommand('selectAll');
-
-                ok = await new Promise(resolve => {
-                    requestAnimationFrame(() => {
-                        try {
-                            const worked = document.execCommand('insertText', false, newText);
-                            resolve(!!worked);
-                        } catch (err) {
-                            resolve(false);
-                        }
-                    });
-                });
-
+                
+                let ok = document.execCommand('insertText', false, newText);
+                
                 if (!ok) {
                     target.textContent = newText;
                     target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: newText }));
-                    ok = true;
                 }
-
-                setTimeout(() => { try { target.blur(); } catch(e){} }, 50);
-            } catch (err) {}
+                return true;
+            } catch (err) {
+                return false;
+            }
         }
 
-        return ok;
+        return false;
     }
 
     function downloadPayload(text) {
